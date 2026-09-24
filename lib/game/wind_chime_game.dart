@@ -13,17 +13,20 @@ import 'render/sky_background.dart';
 
 /// Runs the simulation from Flame's loop and draws it. Owns no physics: it advances the
 /// simulation by each frame's time, then forwards the frame's impacts to the renderer and to
-/// [collisionSinks] (audio, debug stats), and calls [onFrame] once the frame's physics is done.
+/// [collisionSinks] (audio, debug stats). [beforePhysics] runs first each frame, so inputs such as
+/// phone motion land in this frame's steps; [onFrame] runs once the frame's physics is done.
 class WindChimeGame extends FlameGame implements CollisionSink {
   WindChimeGame({
     required this.simulation,
     this.collisionSinks = const [],
+    this.beforePhysics,
     this.onFrame,
     this.stats,
   });
 
   final ChimeSimulation simulation;
   final List<CollisionSink> collisionSinks;
+  final void Function(double dt)? beforePhysics;
   final void Function(double dt)? onFrame;
   final DebugStats? stats;
   final ChimeProjection projection = ChimeProjection();
@@ -56,6 +59,7 @@ class WindChimeGame extends FlameGame implements CollisionSink {
 
   @override
   void update(double dt) {
+    beforePhysics?.call(dt);
     final steps = simulation.advance(dt);
     simulation.events.drainTo(this);
     // Hold the camera still while a finger drags, so the world doesn't slide under it.

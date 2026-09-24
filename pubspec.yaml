@@ -39,6 +39,7 @@ dependencies:
     path: packages/chime_sim
   flutter_soloud: ^5.1.2
   audio_session: ^0.2.4
+  sensors_plus: ^7.1.0
 
 dev_dependencies:
   flutter_test:

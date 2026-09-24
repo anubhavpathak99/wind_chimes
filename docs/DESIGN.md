@@ -3,10 +3,10 @@
 A physically simulated wind chime for iOS and Android, built with Flutter + Flame. Its movement and
 sound respond to real-world wind and to how the phone is held, tilted and shaken.
 
-**Status:** Phases 0–3 done (simulation core, 2.5D renderer, drag/fling, wind model, tuning harness,
-camera framing, audio engine). Next: Phase 4 (motion sensors). See
-[Phase 2 tuning notes](#phase-2-tuning-notes) and [Phase 3 audio notes](#phase-3-audio-notes).
-See [Roadmap](#g-implementation-roadmap).
+**Status:** Phases 0–4 done (simulation core, 2.5D renderer, drag/fling, wind model, tuning harness,
+camera framing, audio engine, motion sensors). Next: Phase 5 (real weather). See
+[Phase 2 tuning notes](#phase-2-tuning-notes), [Phase 3 audio notes](#phase-3-audio-notes) and
+[Phase 4 motion notes](#phase-4-motion-notes).
 
 ---
 
@@ -635,6 +635,37 @@ it and fades in over 800 ms. Background playback is not in the MVP.
 **Soak results** (5 simulated minutes, real impacts through mapper and allocator): at 3 m/s, 346
 voices, no tube ever repeated a sample back to back, peak 9 voices; in a 20 m/s gale, peak 15 of 24,
 no hits skipped. Every steal is a fade of ≥ 30 ms.
+
+### Phase 4 motion notes
+
+`lib/motion/`: `MotionSource` (sensors_plus at 50 Hz, replaceable by a native fused-motion plugin),
+`MotionProcessor` (pure, tested with synthetic sensor data), `ShakeDetector`, `OneEuroFilter`, and
+`MotionController`, which feeds readings to the processor as they arrive and writes tilt and
+acceleration into `SimInputs` once per frame, before the physics steps.
+
+- **Tilt:** accelerometer minus the OS's linear acceleration (paired within 0.1 s), so shaking
+  doesn't read as tilting; 1€ filter (0.8 Hz at rest, β = 1 in g units); roll clamped to ±40°;
+  faded out as the phone lies flat or turns upside down. Tested: 20° right-edge-down reads 20°,
+  also when the phone is leaned back 50° as people hold it; ±0.3 m/s² noise moves it < 1.5°.
+- **Push:** soft dead zone of 0.15 m/s², 25 ms smoothing, × sensitivity (0–2), then a soft knee
+  that passes pushes unchanged up to 0.9 g and compresses toward 1.5 g. Fades out if readings stop
+  for 0.2 s.
+- **No gyroscope:** a phone without the OS's linear-acceleration sensor (the stream errors with
+  `NO_SENSOR`, or stays silent for 1 s) derives it from the accelerometer minus a slow gravity
+  estimate (0.6 s, trusting readings less the further their magnitude is from 1 g), and takes tilt
+  from that estimate. Tilt then follows in about half a second.
+- **Shake detection:** ≥3 sideways reversals over 0.5 g within 0.8 s and RMS > 0.4 g; ends about
+  1.2 s after shaking stops. Walking and single bumps don't count. Reported to the UI; haptics
+  will use it in Phase 7.
+- **Lifecycle:** sensors stop when the app is hidden and restart when it returns; without sensors
+  (desktop, most desktop browsers) motion reports "no motion sensors" and the chime hangs straight.
+- **Physics checks** (`packages/chime_sim/test/motion_response_test.dart`): a 20° gravity tilt makes
+  the chime hang at 20 ± 2°; a 3 s side-to-side shake with no wind produces a flurry of ≥5 hits;
+  10 s of walking-like vertical bobbing produces ≤2.
+- **Emulator check:** injected accelerometer values tilted the chime 20° and a synthetic shake read
+  "push 7.2 m/s², shaking 51%" with 4–5 hits/s. During that synthetic shake tilt briefly read 25°:
+  instant ±9 m/s² steps with no matching gyroscope rotation fool the emulator's sensor fusion. If
+  tilt wobbles while shaking a real phone, the fix is the native fused-motion plugin.
 
 ## H. MVP Definition
 
