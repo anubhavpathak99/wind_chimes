@@ -35,6 +35,7 @@ class ChimeProjection {
   double _width = 0;
   double _centerX = 0;
   double _height = 0;
+  double _viewHeight = 0;
   double _lo = 0;
   double _hi = 0;
   double _bottom = 0;
@@ -74,6 +75,8 @@ class ChimeProjection {
     _lo = -halfWidth;
     _hi = halfWidth;
     _bottom = chimeBottom;
+    // Keep the share of the screen left visible (by an open sheet, say) across a resize.
+    _viewHeight = _height > 0 ? height * _viewHeight / _height : height;
     _width = width;
     _height = height;
     _centerX = width / 2;
@@ -81,6 +84,11 @@ class ChimeProjection {
     _pivotWorldY = chimeBottom / 2;
     _placePivot();
   }
+
+  /// How much of the canvas, from the top, is not covered by something like an open sheet, pixels.
+  /// [follow] frames the chime within it, shrinking it if needed. At least 40% of the canvas.
+  double get visibleHeight => _viewHeight;
+  set visibleHeight(double value) => _viewHeight = value.clamp(0.4 * _height, _height);
 
   /// Eases the camera toward framing the box from the hook down to [minY] and across
   /// [minX]..[maxX] (the hook included): the box is fitted into the viewing area, zooming out but
@@ -104,7 +112,7 @@ class ChimeProjection {
     _hi = hi > _hi ? hi : _hi + (hi - _hi) * release;
     _bottom = bottom < _bottom ? bottom : _bottom + (bottom - _bottom) * release;
 
-    final areaHeight = _heightFill * _height;
+    final areaHeight = _heightFill * _viewHeight;
     final boxWidth = (_hi - _lo) * basePixelsPerMeter;
     final boxHeight = -_bottom * basePixelsPerMeter;
     var targetZoom = 1.0;
@@ -112,7 +120,8 @@ class ChimeProjection {
     if (boxHeight > 0) targetZoom = math.min(targetZoom, areaHeight / boxHeight);
     final zoomStep = 1 - math.exp(-dt / zoomSeconds);
     zoom += (targetZoom - zoom) * zoomStep;
-    final targetHookY = _topMargin * _height + math.max(0.0, areaHeight - boxHeight * zoom) / 2;
+    final targetHookY =
+        _topMargin * _viewHeight + math.max(0.0, areaHeight - boxHeight * zoom) / 2;
     hookY += (targetHookY - hookY) * zoomStep;
     panX += ((_lo + _hi) / 2 - panX) * (1 - math.exp(-dt / panSeconds));
     _placePivot();

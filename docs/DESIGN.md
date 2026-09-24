@@ -3,10 +3,12 @@
 A physically simulated wind chime for iOS and Android, built with Flutter + Flame. Its movement and
 sound respond to real-world wind and to how the phone is held, tilted and shaken.
 
-**Status:** Phases 0–5 done (simulation core, 2.5D renderer, drag/fling, wind model, tuning harness,
-camera framing, audio engine, motion sensors, real weather). Next: Phase 6 (UI shell). See
+**Status:** Phases 0–7 done (simulation core, 2.5D renderer, drag/fling, wind model, tuning harness,
+camera framing, audio engine, motion sensors, real weather, UI shell, polish). Still to do on real
+phones: the 60 fps and battery checks (`tool/battery_check.sh`). See
 [Phase 2 tuning notes](#phase-2-tuning-notes), [Phase 3 audio notes](#phase-3-audio-notes),
-[Phase 4 motion notes](#phase-4-motion-notes) and [Phase 5 weather notes](#phase-5-weather-notes).
+[Phase 4 motion notes](#phase-4-motion-notes), [Phase 5 weather notes](#phase-5-weather-notes),
+[Phase 6 UI notes](#phase-6-ui-notes) and [Phase 7 polish notes](#phase-7-polish-notes).
 
 ---
 
@@ -496,7 +498,7 @@ wind_chimes/
 │   │   ├── render/     projection, sky, chime renderer
 │   │   └── input/      drag → touch constraint
 │   ├── weather/ location/ storage/ wind/ motion/ audio/ settings/  (Phases 2–6)
-│   └── ui/             chime_screen, overlays/ (debug panel; later wind chip, controls sheet)
+│   └── ui/             chime_screen, wind_chip, controls/ (sheet, dial, location), overlays/ (stats)
 ├── assets/audio/<preset>/<rod>_<layer>_<rr>.ogg, assets/audio/ambience/wind_loop.ogg
 └── test/
 ```
@@ -722,6 +724,134 @@ writes it into `SimInputs`, and `WindServices`, the bundle tests replace.
   User-Agent, which browsers don't allow, so web would stay on Open-Meteo or go through a proxy);
   persisting mode and placement (Phase 6 settings); Beaufort wording and the wind chip (Phase 6).
 
+### Phase 6 UI notes
+
+`lib/settings/`: `AppSettings` (everything the user sets, as JSON that tolerates missing and bad
+values) and `SettingsController` (saves 500 ms after the last change, and at once when the app is
+hidden). `lib/ui/`: `WindChip` with the first-run `LiveWindOffer`, `controls/ControlsSheet`,
+`DirectionDial`, `LocationSection`, `OverlayVisibility`, `WindText` (units, Beaufort, status words).
+`lib/app/AppServices` bundles weather, location, place search, storage and motion for tests.
+
+- **Settings before the first frame:** `main` awaits the saved settings (a few milliseconds) so the
+  app never opens in the wrong mode and flips. Units default by region: mph in the US, UK, Liberia
+  and Myanmar, km/h elsewhere.
+- **Wind chip** (top left): speed in the chosen units, an arrow the way the wind blows, the compass
+  point it comes from, a dot for the source. Tapped: Beaufort name, gusts, source, place and age,
+  any problem and the attribution.
+- **First run:** the ambient breeze plays at once and the chip asks "Hear the real wind where you
+  are?": *Use my location* (the only thing that ever shows the permission prompt), *Pick a city*
+  (opens the sheet with the search focused) or *Not now*. A declined permission explains itself
+  and points to picking a city. The answer is remembered; choosing a location in the sheet counts.
+- **Controls sheet:** a pill at the bottom that pulls or taps open to 60% and 92% of the screen,
+  morphing from pill to sheet by clipping (layout stays full width, touches outside the pill reach
+  the chime). Collapsed, only the pill is built, so hidden controls never reach a screen reader.
+  Sections: *Wind* (Live: location and status; Manual: speed on a Beaufort slider in quarter-force
+  steps, B = (v / 0.836)^(2/3), a direction dial in 5° steps that claims its drag so it never
+  scrolls the sheet, gustiness), *Placement* (with the share of the reported wind it feels),
+  *Sound* (volume with gain = v², wind sound level), *Motion* (live status, shaking sensitivity,
+  tilt), *Settings* (units, stats panel, attribution and a note on location privacy). No preset
+  carousel (one preset in the MVP) and no haptics switch (Phase 7).
+- **Chime above the sheet:** the projection has a visible height; an open sheet shrinks and
+  re-centres the chime into the space above it (never less than 40% of the screen), eased like the
+  rest of the camera.
+- **Fading overlays:** the chip and pill fade after 4 s without interaction (10 s while the offer
+  waits) and stay while the sheet or chip details are open. A tap that misses every body is an
+  "empty sky" tap: it toggles them, and closes an open sheet or chip first. A tap where a faded
+  overlay was only brings it back.
+- **Already moving:** 6 s of wind are simulated (impacts discarded) before the chime is first seen,
+  so it opens mid-swing rather than dead still.
+- **Sound within ~1 s:** the sample bank now builds in two steps: one sample per tube (the soft,
+  centre-struck one) plus the wind loop first, a seventh of the synthesis, then the other 35 in the
+  background while the first ones stand in. On the Android emulator: audio ready 140–220 ms after it
+  starts (was 720–1080 ms, 80% of it synthesis) and the full bank ~0.7 s; process start to audio
+  ready 1.07–1.11 s (was 1.6–2.9 s), most of it the engine starting on a software-rendered
+  emulator. Browsers only allow audio after a gesture, so the web build shows "Tap anywhere for
+  sound" until then. No permission prompt appears on launch.
+- **Bugs found on the way:** Flame calls `onGameResize` whenever the widget above the game rebuilds,
+  so every settings change refitted the camera and snapped it back to rest (this also hit the
+  earlier debug panels' sliders). The game now refits only on a real size change, and the
+  `GameWidget` is built once. The controls header lacked a semantic tap action (TalkBack couldn't
+  open the sheet).
+- **Checked:** widget tests on a phone-sized screen (offer, permission declined, fading and
+  tap-to-show, sheet, manual wind, placement and units reaching the chip, settings restored on the
+  first frame); on the web (first run, fading, sheet with the chime reframed, dial and Beaufort
+  slider); on the Android emulator (first run, *Pick a city* with the keyboard, live Oslo wind, a
+  relaunch that remembered everything, chip details, launch timings).
+
+### Phase 7 polish notes
+
+**Mount twist.** The mount now turns about its rope. `Yaw` holds the angle; the tubes hang from
+`PointRef.onBody` points whose offsets turn with it, and a string correction applied at such a point
+is shared between moving the mount and turning it, by its lever arm: the point's generalized
+inverse mass along n gains (r × n)²_y / I, and the turn changes by (r × Δ)_y / I (I = ½·m·r² of the
+disc). The twisted rope pulls back with 4·10⁻⁴ N·m/rad and damps with 3·10⁻⁴ N·m·s/rad, soft as a
+real cord: pushing a tube sideways turns the whole chime. In wind, the tubes' unequal lengths and
+the gusts' delay across the ring turn it to and fro: RMS 1° at 1 m/s, 5° at 3, 10° at 6, 13° at 10,
+15° at 20 (peaks to ~45° in a gale). Hit rates stay in their bands (3 m/s: 1.23/s; 6: 2.24; 10:
+2.72). Energy includes the turn (½Iω² + ½kθ²).
+
+**Tube against tube.** `RodContacts` handles the ten pairs of tubes as capsules: closest points
+of the two axes (Ericson §5.1.9), push apart weighted by where on each tube the contact is,
+restitution 0.6 and friction in the velocity pass, a contact cache with hysteresis, per-pair
+retrigger. A knock is reported twice, once per tube (`CollisionEvent.otherRodId`), so audio, the
+strike flash and stats need nothing new. Harness (180 s per speed): clinks start near 4 m/s
+(0.02/s) and reach 0.3/s at 10 m/s and 0.57/s at 20. Tested: a knock is reported for both tubes;
+tubes pushed together never pass through each other and lean together silently. The harness now
+counts clinks apart from clapper hits and reports the twist. No allocation in either solver.
+
+**Clinks sound.** A knock between tubes plays both tubes, brighter than a clapper hit (+0.4 in
+brightness: a brief metal contact) and 6 dB quieter each.
+
+**Sky and light.** `SkyModel` works out the sun's elevation (NOAA's low-accuracy equations, good to
+a fraction of a degree) where the chime is: the chosen place, the phone's last fix, or a guess from
+the time zone (standard offset for the longitude, daylight saving's direction for the hemisphere).
+Palettes are keyed to elevation: night (−18°, full stars), dusk (−8°, the old look), twilight (−2°),
+golden hour (+3°, warm horizon), day (+12°). Rechecked every 20 s; shaders rebuilt only when it
+changes. 90 stars in three twinkle groups (`drawRawPoints`). "Sky follows the time of day" can be
+switched off (always dusk). With stats on, a slider previews the sky at any hour (local solar time at
+the chime's place).
+
+**Tube shading.** The metal reflects the sky: edges take the upper sky's colour, the lower half the
+horizon's; everything dims at night and brightens a little by day. A soft glint slides across each
+tube as the chime turns (its side of the ring against the light) and as the tube tilts.
+
+**Sail.** Drawn as cloth on a wooden dowel: sides bow and the hem ripples, more and faster as the
+wind rises (the flutter phase is accumulated, so a change of wind never jumps it), soft vertical
+folds, a stitched hem line. No cloth simulation: the sail is still one body in the physics.
+
+**Mount.** Eyelets at the tubes' attachment points and grain marks on the underside turn with the
+mount, so its twist is visible.
+
+**Wind motes.** 40 specks drift behind the chime on the same wind, nearer ones bigger, brighter
+and faster (parallax), re-entering from upwind; they fade in calm air and speed up in gusts, just as
+the chime answers them. Arrays only; one circle each per frame.
+
+**Haptics.** `ChimeHaptics` taps the phone on strikes only while you are playing the chime:
+dragging it, for 1 s after letting go (a fling's hits come after the finger leaves), or while
+shaking. Light, medium or heavy by the hit's intensity, at most one tap per 60 ms. The wind alone
+never buzzes the phone. Setting: "Vibrate when you play it".
+
+**Profiling.** The stats panel now shows the engine's build and raster times per frame, the slowest
+frame, and physics time per frame. On the Android emulator (software-rendered, so raster times stand
+for a GPU at its worst): build 0.5 ms and physics 0.05–0.26 ms per frame in a breeze and in a gale,
+raster ~26 ms. Per thread: raster 55–58 % of a core, the UI thread (Dart: physics, drawing
+commands) ~5 %, audio < 1 %. On desktop Chrome: build 0.5 ms, raster 0.4–0.6 ms. The Dart side is
+far inside budget; whether a real mid-range GPU holds 60 fps needs a phone (raster times appear in
+the stats panel of a profile build).
+
+**Battery.** `tool/battery_check.sh [minutes] [serial]` resets Android's battery statistics, runs
+the app with the screen on, and reports the drain Android attributes to the app (mAh, and % an hour
+of the phone's capacity) along with the level drop. Over wireless debugging the level drop is real;
+over USB only the estimate is. Checked for correctness on the emulator (whose battery is simulated,
+so its numbers mean nothing).
+
+**Fixed on the way.** The glint gradient lacked stops (a crash in paint); the collapsed pill could
+keep a 12 px scroll after the open sheet was scrolled (its bottom padding made it scrollable), which
+hid the handle; a widget test depended on the clock-driven ambient breeze.
+
+**Not done.** A frame-rate cap for 120 Hz screens needs the platform's display-mode API; left until
+real-device measurements say it is needed.
+
 ## H. MVP Definition
 
 The MVP proves one thing: *a physically simulated chime, driven by real wind and your hands, sounds
@@ -734,9 +864,9 @@ Ambient fallbacks + Manual mode, tilt and shake via `sensors_plus`, drag and fli
 sheet, hidden debug panel), portrait, foreground only.
 
 **Deliberately out:** presets, chime builder and materials; procedural audio; compass and parallax;
-mount rotation, rod–rod collisions, cloth simulation; background audio and sleep timer; haptics,
-particles, lighting; tablet and landscape layouts; native plugins, proxy server, accounts, analytics;
-Forge2D; isolates.
+cloth simulation; background audio and sleep timer; tablet and landscape layouts; native plugins,
+proxy server, accounts, analytics; Forge2D; isolates. (Mount rotation, rod–rod collisions, haptics,
+wind particles and time-of-day lighting, first listed here, came in with Phase 7.)
 
 ---
 

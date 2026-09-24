@@ -42,6 +42,12 @@ class DebugPanel extends StatelessWidget {
                 style: text,
               ),
               Text(
+                'build ${s.buildMs.toStringAsFixed(1)} · raster ${s.rasterMs.toStringAsFixed(1)} · '
+                'worst ${s.worstFrameMs.toStringAsFixed(0)} · physics '
+                '${s.physicsMs.toStringAsFixed(2)} ms',
+                style: text,
+              ),
+              Text(
                 'wind ${s.windNow.toStringAsFixed(1)} m/s at chime '
                 '(mean ${s.windMean.toStringAsFixed(1)}'
                 '${s.gust > 0.05 ? ', gust +${s.gust.toStringAsFixed(1)}' : ''})',
@@ -49,7 +55,7 @@ class DebugPanel extends StatelessWidget {
               ),
               Text(
                 '${s.hits} hits · ${s.hitsPerSecond.toStringAsFixed(2)}/s · '
-                '${s.dropped} dropped · ${s.recoveries} resets',
+                '${s.clinks} clinks · ${s.dropped} dropped · ${s.recoveries} resets',
                 style: text,
               ),
               ValueListenableBuilder<String>(

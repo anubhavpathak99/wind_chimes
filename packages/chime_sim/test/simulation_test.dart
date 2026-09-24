@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:chime_sim/chime_sim.dart';
 import 'package:test/test.dart';
@@ -108,9 +109,14 @@ void main() {
 
     run(sim, 2);
     expect(drain(sim), isNotEmpty, reason: 'the initial strike');
+    // The push twists the whole chime a little on its rope, which can bring a neighbour round
+    // for a slow tap or two before everything settles.
+    run(sim, 20);
+    drain(sim);
     run(sim, 10);
     expect(drain(sim), isEmpty);
     expect(sim.isTouchingRod(rod), isTrue);
+    expect(sim.mountYawVelocity.abs(), lessThan(0.1), reason: 'still turning, but gently');
   });
 
   test('pressing means real contact: held against a tube, not hovering after a hit', () {
@@ -242,4 +248,112 @@ void main() {
       expect(steps, inInclusiveRange(119, 120));
     });
   });
+
+  test('warming up leaves the chime moving in the wind, silently', () {
+    final sim = ChimeSimulation(ChimeConfig.pentatonicAluminium());
+    sim.inputs
+      ..windSpeed = 5
+      ..windGust = 7.5
+      ..windResponseTime = 0;
+    sim.warmUp(10);
+    expect(sim.time, closeTo(10, 1e-9));
+    expect(sim.events.length, 0);
+    final clapper = 3 * ChimeSimulation.clapperIndex;
+    final moved = (sim.particles.position[clapper] - sim.restPositions[clapper]).abs() +
+        (sim.particles.position[clapper + 2] - sim.restPositions[clapper + 2]).abs();
+    expect(moved, greaterThan(0.002));
+    expect(sim.wind.meanSpeed, greaterThan(2));
+  });
+
+  group('mount twist', () {
+    test('a sideways push on a tube twists the mount, and the rope turns it back', () {
+      final sim = newSim();
+      const rod = 0;
+      final r = sim.rods[rod];
+      final p = sim.particles.position;
+      final tangent = (x: math.cos(r.ringAngle), z: -math.sin(r.ringAngle));
+      final start = (x: p[3 * r.lower], y: p[3 * r.lower + 1], z: p[3 * r.lower + 2]);
+      sim.inputs.grab(r.lower, start.x + tangent.x * 0.03, start.y, start.z + tangent.z * 0.03);
+      run(sim, 3);
+      final twisted = sim.mountYaw.angle;
+      expect(twisted.abs(), greaterThan(0.1), reason: 'the chime turns with the push');
+
+      sim.inputs.release();
+      var peak = 0.0;
+      run(sim, 60, () => peak = math.max(peak, sim.mountYaw.angle.abs()));
+      expect(peak, lessThan(twisted.abs() * 1.5 + 0.05), reason: 'no runaway spin');
+      expect(sim.mountYaw.angle.abs(), lessThan(0.1), reason: 'back near where it started');
+    });
+
+    test('in steady wind the chime turns to and fro, a few degrees', () {
+      final sim = newSim();
+      sim.inputs
+        ..windSpeed = 6
+        ..windGust = 9
+        ..windResponseTime = 0;
+      var sum2 = 0.0, steps = 0;
+      run(sim, 60, () {
+        sum2 += sim.mountYaw.angle * sim.mountYaw.angle;
+        steps++;
+      });
+      final rmsDegrees = math.sqrt(sum2 / steps) * 180 / math.pi;
+      expect(rmsDegrees, inInclusiveRange(1, 30));
+    });
+  });
+
+  group('tube against tube', () {
+    /// Drags tube [a]'s lower end into tube [b] and holds it there.
+    void pushInto(ChimeSimulation sim, int a, int b, {double overshoot = 0.02}) {
+      final p = sim.particles.position;
+      final from = sim.rods[a].lower, to = sim.rods[b].lower;
+      final dx = p[3 * to] - p[3 * from], dz = p[3 * to + 2] - p[3 * from + 2];
+      final d = math.sqrt(dx * dx + dz * dz);
+      sim.inputs.grab(from, p[3 * from] + dx * (1 + overshoot / d), p[3 * from + 1],
+          p[3 * from + 2] + dz * (1 + overshoot / d));
+    }
+
+    test('knocking two tubes together clinks, reported once for each tube', () {
+      final sim = newSim();
+      pushInto(sim, 0, 1);
+      final events = <({int rod, int other})>[];
+      final sink = _Clinks(events);
+      run(sim, 1, () => sim.events.drainTo(sink));
+      sim.events.drainTo(sink);
+      expect(events, isNotEmpty);
+      expect(events.first.other, isNot(-1));
+      expect(events.where((e) => e.rod == 0 && e.other == 1), isNotEmpty);
+      expect(events.where((e) => e.rod == 1 && e.other == 0), isNotEmpty);
+    });
+
+    test('tubes pushed together never pass through each other, and lean together quietly', () {
+      final sim = newSim();
+      pushInto(sim, 2, 3, overshoot: 0.05);
+      final a = sim.rods[2], b = sim.rods[3];
+      final ends = Float64List(3);
+      var closest = double.infinity;
+      final events = <({int rod, int other})>[];
+      final sink = _Clinks(events);
+      run(sim, 20, () {
+        sim.events.drainTo(sink);
+        a.bottom.eval(sim.particles.position, ends);
+        final ax = ends[0], az = ends[2];
+        b.bottom.eval(sim.particles.position, ends);
+        final gap = math.sqrt((ax - ends[0]) * (ax - ends[0]) + (az - ends[2]) * (az - ends[2]));
+        closest = math.min(closest, gap);
+      });
+      expect(closest, greaterThan(a.spec.radius + b.spec.radius - 0.004));
+      events.clear();
+      run(sim, 5, () => sim.events.drainTo(sink));
+      expect(events.where((e) => e.other >= 0), isEmpty, reason: 'resting contact is silent');
+    });
+  });
+}
+
+class _Clinks implements CollisionSink {
+  _Clinks(this.events);
+
+  final List<({int rod, int other})> events;
+
+  @override
+  void onCollision(CollisionEvent event) => events.add((rod: event.rodId, other: event.otherRodId));
 }

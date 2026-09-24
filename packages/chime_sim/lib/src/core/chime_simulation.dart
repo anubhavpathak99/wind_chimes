@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import '../collision/clapper_contacts.dart';
+import '../collision/rod_contacts.dart';
 import '../config/chime_config.dart';
 import '../events/collision_event.dart';
 import '../inputs/sim_inputs.dart';
@@ -39,10 +40,14 @@ final class ChimeSimulation {
   final EventRing events = EventRing(64);
   final WindField wind;
 
+  /// The mount's turn about the rope. The tubes hang from points that turn with it.
+  late final Yaw mountYaw = Yaw(1 / config.mountInertia);
+
   late final Particles particles;
   late final List<RodBody> rods;
   late final List<Link> _links;
   late final ClapperContacts _contacts;
+  late final RodContacts _rodContacts;
   late final Float64List _rest;
   late final Float64List _stepStart;
 
@@ -52,6 +57,9 @@ final class ChimeSimulation {
   final Float64List _pb = Float64List(3);
 
   double _accumulator = 0;
+  double _yawAtStepStart = 0;
+  double _yawPrevious = 0;
+  double _yawVelocity = 0;
   double _time = 0;
   int _steps = 0;
   int _resets = 0;
@@ -93,6 +101,7 @@ final class ChimeSimulation {
   /// Runs exactly one fixed step.
   void step() {
     _stepStart.setAll(0, particles.position);
+    _yawAtStepStart = mountYaw.angle;
     _contacts.beginStep();
     wind.step(inputs);
     final pos = particles.position;
@@ -111,6 +120,17 @@ final class ChimeSimulation {
     }
   }
 
+  /// Runs [seconds] of simulation with its impacts discarded, so a chime seen for the first time
+  /// is already moving in the wind it has been hanging in instead of starting dead still.
+  void warmUp(double seconds) {
+    final n = (seconds / stepDt).round();
+    for (var i = 0; i < n; i++) {
+      step();
+      events.clear();
+    }
+    _accumulator = 0;
+  }
+
   /// Returns every body to its hanging rest pose, at rest.
   void reset() {
     particles.position.setAll(0, _rest);
@@ -118,7 +138,9 @@ final class ChimeSimulation {
     particles.velocity.fillRange(0, particles.velocity.length, 0);
     _stepStart.setAll(0, _rest);
     _accumulator = 0;
+    mountYaw.angle = _yawAtStepStart = _yawPrevious = _yawVelocity = 0;
     _contacts.reset();
+    _rodContacts.reset();
   }
 
   /// Positions blended between the last two fixed steps, for rendering.
@@ -130,6 +152,13 @@ final class ChimeSimulation {
       out[i] = from + (pos[i] - from) * alpha;
     }
   }
+
+  /// The mount's turn blended between the last two fixed steps, for rendering.
+  double get interpolatedMountYaw =>
+      _yawAtStepStart + (mountYaw.angle - _yawAtStepStart) * interpolationAlpha;
+
+  /// The mount's angular velocity about the rope, rad/s.
+  double get mountYawVelocity => _yawVelocity;
 
   /// Rest positions, packed like [Particles.position].
   Float64List get restPositions => Float64List.fromList(_rest);
@@ -147,7 +176,10 @@ final class ChimeSimulation {
       final height = -(gx * pos[k] + gy * pos[k + 1] + gz * pos[k + 2]);
       energy += 0.5 * m * v2 + m * config.gravity * height;
     }
-    return energy;
+    final yaw = mountYaw.angle;
+    return energy +
+        0.5 * config.mountInertia * _yawVelocity * _yawVelocity +
+        0.5 * config.torsionStiffness * yaw * yaw;
   }
 
   /// Worst relative violation across all constraints: rigid links in either direction, strings
@@ -238,10 +270,17 @@ final class ChimeSimulation {
       pos[k + 2] += h * vz;
     }
 
+    // The mount's turn: the twisted rope pulls it back, air and the rope's own friction damp it.
+    final torque = -config.torsionStiffness * mountYaw.angle - config.torsionDamping * _yawVelocity;
+    _yawVelocity += h * torque * mountYaw.inverseInertia;
+    _yawPrevious = mountYaw.angle;
+    mountYaw.angle = _yawPrevious + h * _yawVelocity;
+
     for (final link in _links) {
       _solveLink(link);
     }
     _contacts.solvePositions(time);
+    _rodContacts.solvePositions(time);
     _contacts.confine();
     // Contacts can push a tube against its string; a second pass keeps a hard jam from
     // stretching it.
@@ -253,7 +292,9 @@ final class ChimeSimulation {
     for (var i = 0; i < pos.length; i++) {
       vel[i] = (pos[i] - prev[i]) * invH;
     }
+    _yawVelocity = (mountYaw.angle - _yawPrevious) * invH;
     _contacts.solveVelocities();
+    _rodContacts.solveVelocities();
 
     final maxSpeed = config.maxSpeed;
     for (var i = 0; i < particles.count; i++) {
@@ -283,7 +324,8 @@ final class ChimeSimulation {
     if (dist < 1e-9) return;
     final c = dist - link.length;
     if (link.slack && c <= 0) return;
-    final wSum = link.a.inverseMass(w) + link.b.inverseMass(w);
+    final nx = dx / dist, ny = dy / dist, nz = dz / dist;
+    final wSum = link.a.inverseMass(w, nx, ny, nz) + link.b.inverseMass(w, nx, ny, nz);
     if (wSum == 0) return;
     final lambda = -c / (wSum * dist);
     link.a.applyCorrection(pos, w, lambda * dx, lambda * dy, lambda * dz);
@@ -296,7 +338,7 @@ final class ChimeSimulation {
     for (var i = 0; i < pos.length; i++) {
       sum += pos[i] + vel[i];
     }
-    return sum.isFinite;
+    return (sum + mountYaw.angle + _yawVelocity).isFinite;
   }
 
   void _build() {
@@ -343,7 +385,7 @@ final class ChimeSimulation {
         lower: 4 + 2 * k,
         spec: spec,
         ringAngle: angle,
-        anchor: PointRef.particle(mountIndex, ox: ax, oy: 0, oz: az),
+        anchor: PointRef.onBody(mountIndex, mountYaw, ox: ax, oz: az),
       );
       final centerY = mountY - spec.stringLength - spec.length / 2;
       final halfSpacing = rod.particleSpacing / 2;
@@ -377,6 +419,7 @@ final class ChimeSimulation {
       config: config,
       events: events,
     );
+    _rodContacts = RodContacts(particles: particles, rods: rods, config: config, events: events);
   }
 
   void _setRest(int i, double x, double y, double z) {

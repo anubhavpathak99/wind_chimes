@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:wind_chimes/app/app_services.dart';
 import 'package:wind_chimes/location/location.dart';
 import 'package:wind_chimes/storage/key_value_store.dart';
 import 'package:wind_chimes/weather/weather_provider.dart';
 import 'package:wind_chimes/weather/wind_timeline.dart';
-import 'package:wind_chimes/wind/wind_services.dart';
+
+import '../motion/fake_motion_source.dart';
 
 /// A timeline of steady wind from [from] for [hours], starting at [start].
 WindTimeline steadyTimeline(
@@ -75,10 +77,17 @@ class FakePlaces implements PlaceSearch {
   Future<List<Place>> search(String query) async => results;
 }
 
-/// Offline by default: no network, no location chosen.
-WindServices fakeWindServices({FakeWeather? weather, KeyValueStore? store}) => WindServices(
+/// Offline by default: no network, no location chosen, sensors that never report.
+AppServices fakeServices({
+  FakeWeather? weather,
+  FakeLocation? location,
+  FakePlaces? places,
+  KeyValueStore? store,
+}) =>
+    AppServices(
       weather: weather ?? FakeWeather(),
-      location: FakeLocation(),
-      places: FakePlaces(),
+      location: location ?? FakeLocation(),
+      places: places ?? FakePlaces(),
       store: store ?? MemoryStore(),
+      motion: FakeMotionSource(),
     );

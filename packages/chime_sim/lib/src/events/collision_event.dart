@@ -5,6 +5,12 @@
 final class CollisionEvent {
   int rodId = 0;
 
+  /// The tube that knocked into [rodId], or -1 when the clapper struck it. A knock between two
+  /// tubes is reported twice, once for each.
+  int otherRodId = -1;
+
+  bool get isClink => otherRodId >= 0;
+
   /// Impulse exchanged along the contact normal, N·s.
   double impulse = 0;
 

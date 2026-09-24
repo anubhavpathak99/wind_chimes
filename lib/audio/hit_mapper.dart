@@ -45,6 +45,11 @@ class HitMapper {
   /// Width of the random overlap between layers, in intensity units.
   static const double layerOverlap = 0.6;
 
+  /// A tube knocking a tube is a brief metal-on-metal contact, brighter than the wooden clapper;
+  /// and since both tubes sound, each plays a little quieter.
+  static const double clinkBrightening = 0.4;
+  static const double clinkDb = -6;
+
   /// Stereo spread of the ring: a tube at the far right pans this far.
   static const double panWidth = 0.35;
 
@@ -65,7 +70,9 @@ class HitMapper {
     final rod = event.rodId;
     final s = intensity(event.impulse);
 
-    final brightness = (s - glancingDarkening * event.glancing).clamp(0.0, 1.0);
+    final clink = event.isClink;
+    final brightness =
+        (s - glancingDarkening * event.glancing + (clink ? clinkBrightening : 0)).clamp(0.0, 1.0);
     final layer = (brightness * (layout.layers - 1) + (_random.nextDouble() - 0.5) * layerOverlap)
         .round()
         .clamp(0, layout.layers - 1);
@@ -78,7 +85,7 @@ class HitMapper {
     }
     _lastSample[rod] = sample;
 
-    final db = quietestDb * (1 - s) + gainJitterDb * _jitter();
+    final db = quietestDb * (1 - s) + gainJitterDb * _jitter() + (clink ? clinkDb : 0);
     final cents = detuneCents * _jitter();
     return (
       rod: rod,

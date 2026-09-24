@@ -50,6 +50,7 @@ class WindStatus {
     required this.placement,
     required this.manual,
     this.location,
+    this.coordinates,
     this.updatedAt,
     this.problem,
     this.retryAt,
@@ -67,6 +68,9 @@ class WindStatus {
   final Placement placement;
   final ManualWind manual;
   final LocationChoice? location;
+
+  /// Where the live wind is from, rounded, if known.
+  final Coordinates? coordinates;
 
   /// When the forecast being played was fetched.
   final DateTime? updatedAt;
@@ -101,6 +105,9 @@ class WindController {
     DateTime Function()? clock,
     math.Random? random,
     this.ambient = const AmbientWind(),
+    this._mode = WindMode.live,
+    this._manual = const ManualWind(),
+    this._placement = Placement.garden,
   })  : _locator = location,
         _cache = WeatherCache(_store),
         _clock = clock ?? DateTime.now,
@@ -135,9 +142,9 @@ class WindController {
   final math.Random _random;
   final Backoff _backoff;
 
-  WindMode _mode = WindMode.live;
-  Placement _placement = Placement.garden;
-  ManualWind _manual = const ManualWind();
+  WindMode _mode;
+  Placement _placement;
+  ManualWind _manual;
   LocationChoice? _location;
   WeatherReport? _report;
   WindProblem? _problem;
@@ -403,6 +410,11 @@ class WindController {
       placement: _placement,
       manual: _manual,
       location: _location,
+      coordinates: switch (_location) {
+        Place(:final coordinates) => coordinates.rounded,
+        DeviceLocation() => _report?.coordinates,
+        null => null,
+      },
       updatedAt: live ? _usableReport(now)?.fetchedAt : null,
       problem: live ? problem : null,
       retryAt: live && _problem != null ? _nextRefresh : null,

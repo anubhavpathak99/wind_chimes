@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import '../config/chime_config.dart';
 import '../core/chime_simulation.dart';
 import '../events/collision_event.dart';
@@ -26,6 +28,8 @@ final class HitRateReport {
     required this.maxImpulse,
     required this.leaning,
     required this.confined,
+    this.clinks = 0,
+    this.twist = 0,
   });
 
   /// Reported 10 m wind, m/s.
@@ -47,6 +51,12 @@ final class HitRateReport {
 
   /// Fraction of substeps in which the clapper had to be kept from escaping the ring.
   final double confined;
+
+  /// Knocks between tubes, not counted in [hits].
+  final int clinks;
+
+  /// RMS turn of the mount on its rope, radians.
+  final double twist;
 
   double get hitsPerSecond => hits / seconds;
 }
@@ -80,9 +90,11 @@ HitRateReport measureHitRate(
   final confinedBefore = sim.clapperConfinements;
   final steps = (seconds / ChimeSimulation.stepDt).round();
   var leaningSteps = 0;
+  var twist2 = 0.0;
   for (var i = 0; i < steps; i++) {
     sim.step();
     sim.events.drainTo(hits);
+    twist2 += sim.mountYaw.angle * sim.mountYaw.angle;
     for (var k = 0; k < sim.rods.length; k++) {
       if (sim.isTouchingRod(k)) {
         leaningSteps++;
@@ -105,15 +117,23 @@ HitRateReport measureHitRate(
     maxImpulse: impulses.isEmpty ? 0 : impulses.last,
     leaning: leaningSteps / steps,
     confined: (sim.clapperConfinements - confinedBefore) / (steps * ChimeSimulation.substeps),
+    clinks: hits.clinkReports ~/ 2,
+    twist: math.sqrt(twist2 / steps),
   );
 }
 
+/// Clapper hits; knocks between tubes are counted apart, once per knock.
 class _Collector implements CollisionSink {
   final impulses = <double>[];
   final rods = <int>{};
+  int clinkReports = 0;
 
   @override
   void onCollision(CollisionEvent event) {
+    if (event.isClink) {
+      clinkReports++;
+      return;
+    }
     impulses.add(event.impulse);
     rods.add(event.rodId);
   }

@@ -31,6 +31,12 @@ class TubeBankLayout {
   int sampleIndex(int tube, {required int layer, required int position, required int take}) =>
       ((tube * layers + layer) * strikePositions.length + position) * takes + take;
 
+  /// The sample played first for [tube], and in place of any not yet loaded: the softest layer,
+  /// struck near the middle, as a breeze's first hits are.
+  int firstSampleOf(int tube) => sampleIndex(tube, layer: 0, position: 0, take: 0);
+
+  int tubeOf(int sample) => sample ~/ samplesPerTube;
+
   /// The position variant closest to [strikePos].
   int nearestPosition(double strikePos) {
     var best = 0;
@@ -43,31 +49,46 @@ class TubeBankLayout {
   }
 }
 
-typedef TubeBankRequest = ({List<double> frequencies, TubeBankLayout layout});
-typedef TubeBank = ({List<Uint8List> tubes, Uint8List wind});
+/// Which samples to synthesize: all of them, or only the sample indices in `only`; and whether
+/// to include the wind loop.
+typedef TubeBankRequest = ({
+  List<double> frequencies,
+  TubeBankLayout layout,
+  List<int>? only,
+  bool wind,
+});
 
-/// Synthesizes every sample in the layout, as WAV files in sample-index order, plus the wind loop.
-/// Self-contained so it can run in a background isolate.
+/// WAV files by sample index, and the wind loop if it was asked for.
+typedef TubeBank = ({Map<int, Uint8List> tubes, Uint8List? wind});
+
+/// Synthesizes the requested samples of the layout as WAV files, plus the wind loop. A sample
+/// comes out the same whichever request builds it. Self-contained so it can run in a background
+/// isolate.
 TubeBank buildTubeBank(TubeBankRequest request) {
   final layout = request.layout;
-  final tubes = <Uint8List>[];
+  final only = request.only?.toSet();
+  final tubes = <int, Uint8List>{};
   for (var tube = 0; tube < request.frequencies.length; tube++) {
     for (var layer = 0; layer < layout.layers; layer++) {
       for (var position = 0; position < layout.strikePositions.length; position++) {
         for (var take = 0; take < layout.takes; take++) {
+          final index = layout.sampleIndex(tube, layer: layer, position: position, take: take);
+          if (only != null && !only.contains(index)) continue;
           final samples = synthesizeTubeStrike(
             request.frequencies[tube],
             strikePosition: layout.strikePositions[position],
             contactSeconds: layout.contactSeconds[layer],
             seconds: layout.seconds,
             sampleRate: layout.sampleRate,
-            seed: layout.sampleIndex(tube, layer: layer, position: position, take: take),
+            seed: index,
           );
-          tubes.add(encodeWav16(samples, layout.sampleRate));
+          tubes[index] = encodeWav16(samples, layout.sampleRate);
         }
       }
     }
   }
-  final wind = encodeWav16(synthesizeWindLoop(sampleRate: layout.sampleRate), layout.sampleRate);
+  final wind = request.wind
+      ? encodeWav16(synthesizeWindLoop(sampleRate: layout.sampleRate), layout.sampleRate)
+      : null;
   return (tubes: tubes, wind: wind);
 }

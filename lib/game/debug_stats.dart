@@ -2,6 +2,7 @@ import 'dart:collection';
 
 import 'package:chime_sim/chime_sim.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 
 typedef HitRecord = ({int rod, double impulse, double speed, double strikePos, double glancing});
 
@@ -13,6 +14,11 @@ class DebugSnapshot {
     required this.simTime,
     required this.hits,
     required this.hitsPerSecond,
+    this.clinks = 0,
+    this.buildMs = 0,
+    this.rasterMs = 0,
+    this.worstFrameMs = 0,
+    this.physicsMs = 0,
     required this.dropped,
     required this.recoveries,
     required this.windNow,
@@ -42,6 +48,19 @@ class DebugSnapshot {
 
   /// Over the last [DebugStats.rateWindow] seconds of simulation time.
   final double hitsPerSecond;
+
+  /// Knocks between tubes, counted once per knock and not in [hits].
+  final int clinks;
+
+  /// Average UI-thread build and raster-thread times per frame, and the slowest frame's total,
+  /// over the last publish interval, ms. From the engine's frame timings (profile and release
+  /// builds report them; debug builds are much slower anyway).
+  final double buildMs;
+  final double rasterMs;
+  final double worstFrameMs;
+
+  /// Physics time per frame, ms.
+  final double physicsMs;
   final int dropped;
   final int recoveries;
 
@@ -68,11 +87,35 @@ class DebugStats implements CollisionSink {
   int _steps = 0;
   double _elapsed = 0;
   int _hits = 0;
+  int _clinkReports = 0;
+  int _physicsMicros = 0;
+  int _timedFrames = 0;
+  int _buildMicros = 0;
+  int _rasterMicros = 0;
+  int _worstMicros = 0;
+  bool _timing = false;
 
-  void recordFrame(double dt, int steps, ChimeSimulation simulation) {
+  /// Starts collecting the engine's frame timings.
+  void watchFrameTimings() {
+    if (_timing) return;
+    _timing = true;
+    SchedulerBinding.instance.addTimingsCallback(_onTimings);
+  }
+
+  void _onTimings(List<FrameTiming> timings) {
+    for (final t in timings) {
+      _timedFrames++;
+      _buildMicros += t.buildDuration.inMicroseconds;
+      _rasterMicros += t.rasterDuration.inMicroseconds;
+      if (t.totalSpan.inMicroseconds > _worstMicros) _worstMicros = t.totalSpan.inMicroseconds;
+    }
+  }
+
+  void recordFrame(double dt, int steps, ChimeSimulation simulation, {int physicsMicros = 0}) {
     _frames++;
     _steps += steps;
     _elapsed += dt;
+    _physicsMicros += physicsMicros;
     if (_elapsed < _publishInterval) return;
     while (_hitTimes.isNotEmpty && _hitTimes.first < simulation.time - rateWindow) {
       _hitTimes.removeFirst();
@@ -84,6 +127,11 @@ class DebugStats implements CollisionSink {
       simTime: simulation.time,
       hits: _hits,
       hitsPerSecond: _hitTimes.length / rateWindow,
+      clinks: _clinkReports ~/ 2,
+      buildMs: _timedFrames == 0 ? 0 : _buildMicros / _timedFrames / 1000,
+      rasterMs: _timedFrames == 0 ? 0 : _rasterMicros / _timedFrames / 1000,
+      worstFrameMs: _worstMicros / 1000,
+      physicsMs: _physicsMicros / _frames / 1000,
       dropped: simulation.events.dropped,
       recoveries: simulation.recoveryCount,
       windNow: wind.speed,
@@ -94,11 +142,17 @@ class DebugStats implements CollisionSink {
     _frames = 0;
     _steps = 0;
     _elapsed = 0;
+    _physicsMicros = 0;
+    _timedFrames = _buildMicros = _rasterMicros = _worstMicros = 0;
   }
 
   @override
   void onCollision(CollisionEvent event) {
-    _hits++;
+    if (event.isClink) {
+      _clinkReports++;
+    } else {
+      _hits++;
+    }
     _hitTimes.addLast(event.simTime);
     _recent.insert(0, (
       rod: event.rodId,
@@ -110,5 +164,8 @@ class DebugStats implements CollisionSink {
     if (_recent.length > _recentCount) _recent.removeLast();
   }
 
-  void dispose() => snapshot.dispose();
+  void dispose() {
+    if (_timing) SchedulerBinding.instance.removeTimingsCallback(_onTimings);
+    snapshot.dispose();
+  }
 }

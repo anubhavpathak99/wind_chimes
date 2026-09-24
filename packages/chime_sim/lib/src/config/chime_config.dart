@@ -58,6 +58,9 @@ final class ChimeConfig {
     this.touchFrequency = 6.0,
     this.touchDampingRatio = 0.7,
     this.maxTouchAcceleration = 120.0,
+    this.torsionStiffness = 4e-4,
+    this.torsionDamping = 3e-4,
+    this.rodRestitution = 0.6,
   });
 
   /// Five aluminium tubes tuned to a major pentatonic scale on C5, with a wooden clapper
@@ -114,6 +117,8 @@ final class ChimeConfig {
     double? restingSpeed,
     double? friction,
     double? linearDamping,
+    double? torsionStiffness,
+    double? torsionDamping,
   }) =>
       ChimeConfig(
         rods: rods,
@@ -142,6 +147,9 @@ final class ChimeConfig {
         touchFrequency: touchFrequency,
         touchDampingRatio: touchDampingRatio,
         maxTouchAcceleration: maxTouchAcceleration,
+        torsionStiffness: torsionStiffness ?? this.torsionStiffness,
+        torsionDamping: torsionDamping ?? this.torsionDamping,
+        rodRestitution: rodRestitution,
       );
 
   final List<RodSpec> rods;
@@ -200,6 +208,19 @@ final class ChimeConfig {
   final double touchFrequency;
   final double touchDampingRatio;
   final double maxTouchAcceleration;
+
+  /// How strongly the twisted rope turns the mount back, N·m/rad. A cord is soft in torsion: the
+  /// chime turns slowly to and fro, over seconds.
+  final double torsionStiffness;
+
+  /// Damping of the mount's turn, N·m·s/rad.
+  final double torsionDamping;
+
+  /// Restitution when two tubes knock together.
+  final double rodRestitution;
+
+  /// Moment of inertia of the mount disc about its axis, kg·m².
+  double get mountInertia => 0.5 * mountMass * mountRadius * mountRadius;
 
   /// Where the clapper meets tube [rod] at rest, as a fraction of the tube's length from its top.
   double restStrikePosition(int rod) =>

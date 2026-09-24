@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 // Headless tuning harness: hit rate and impulse statistics across wind speeds.
 //
 //   dart run tool/harness.dart [--seconds 180] [--placement garden] [--gusts 1.5] [--seed 1]
@@ -17,7 +19,7 @@ void main(List<String> args) {
   final targets = {for (final t in hitRateTargets) t.windSpeed: t};
 
   print('placement ${placement.name}, gust factor $gusts, ${seconds.round()} s per speed, seed $seed\n');
-  print('10m m/s  chime m/s  hits/s  tubes  J50 mN·s  J90 mN·s  Jmax mN·s  leaning  caged  target');
+  print('10m m/s  chime m/s  hits/s  tubes  J50 mN·s  J90 mN·s  Jmax mN·s  leaning  caged  clinks  twist  target');
   for (final speed in [0.0, 0.5, 1, 2, 3, 4, 6, 8, 10, 14, 20]) {
     final r = measureHitRate(config,
         windSpeed: speed.toDouble(), gustFactor: gusts, placement: placement, seconds: seconds, seed: seed);
@@ -38,6 +40,8 @@ void main(List<String> args) {
         '${(r.maxImpulse * 1000).toStringAsFixed(1).padLeft(9)}  '
         '${(r.leaning * 100).toStringAsFixed(0).padLeft(6)}%  '
         '${(r.confined * 100).toStringAsFixed(1).padLeft(4)}%  '
+        '${(r.clinks / r.seconds).toStringAsFixed(2).padLeft(6)}  '
+        '${(r.twist * 180 / math.pi).toStringAsFixed(0).padLeft(4)}°  '
         '$verdict');
   }
 }

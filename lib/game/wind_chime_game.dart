@@ -9,44 +9,63 @@ import 'debug_stats.dart';
 import 'input/chime_drag_input.dart';
 import 'render/chime_projection.dart';
 import 'render/chime_renderer.dart';
-import 'render/sky_background.dart';
+import 'render/sky.dart';
+import 'render/wind_motes.dart';
 
 /// Runs the simulation from Flame's loop and draws it. Owns no physics: it advances the
 /// simulation by each frame's time, then forwards the frame's impacts to the renderer and to
 /// [collisionSinks] (audio, debug stats). [beforePhysics] runs first each frame, so inputs such as
 /// phone motion land in this frame's steps; [onFrame] runs once the frame's physics is done.
+/// [onEmptyTap] reports a tap on the sky rather than the chime.
 class WindChimeGame extends FlameGame implements CollisionSink {
   WindChimeGame({
     required this.simulation,
     this.collisionSinks = const [],
     this.beforePhysics,
     this.onFrame,
+    this.onEmptyTap,
     this.stats,
-  });
+    SkyModel? sky,
+  }) : sky = sky ?? SkyModel();
 
   final ChimeSimulation simulation;
   final List<CollisionSink> collisionSinks;
   final void Function(double dt)? beforePhysics;
   final void Function(double dt)? onFrame;
+  final void Function()? onEmptyTap;
   final DebugStats? stats;
+
+  /// The time-of-day sky, which also lights the chime.
+  final SkyModel sky;
   final ChimeProjection projection = ChimeProjection();
-  late final ChimeRenderer _renderer = ChimeRenderer(simulation, projection);
+  late final ChimeRenderer _renderer = ChimeRenderer(simulation, projection, sky);
   final Float64List _end = Float64List(3);
+  final Vector2 _fitted = Vector2.zero();
+  final Stopwatch _physicsClock = Stopwatch();
 
   /// Room kept around the chime's outermost particles when framing it, meters: enough for the
   /// sail's corners when it flies sideways.
   static const _frameMargin = 0.1;
 
   @override
-  Color backgroundColor() => SkyBackground.top;
+  Color backgroundColor() => sky.palette.top;
 
   @override
   Future<void> onLoad() async {
-    await addAll([SkyBackground(), _renderer, ChimeDragInput(simulation, projection)]);
+    await addAll([
+      SkyBackground(sky),
+      WindMotes(simulation.wind, sky),
+      _renderer,
+      ChimeDragInput(simulation, projection, onEmptyTap: onEmptyTap),
+    ]);
   }
 
   @override
   void onGameResize(Vector2 size) {
+    // Flame calls this whenever the widget above rebuilds, not only on a real resize: refitting
+    // then would snap the camera back to rest.
+    if (size.x == _fitted.x && size.y == _fitted.y) return super.onGameResize(size);
+    _fitted.setFrom(size);
     final config = simulation.config;
     projection.fit(
       width: size.x,
@@ -60,12 +79,16 @@ class WindChimeGame extends FlameGame implements CollisionSink {
   @override
   void update(double dt) {
     beforePhysics?.call(dt);
+    _physicsClock
+      ..reset()
+      ..start();
     final steps = simulation.advance(dt);
+    _physicsClock.stop();
     simulation.events.drainTo(this);
     // Hold the camera still while a finger drags, so the world doesn't slide under it.
     if (!simulation.inputs.isTouching) _frameChime(dt);
     onFrame?.call(dt);
-    stats?.recordFrame(dt, steps, simulation);
+    stats?.recordFrame(dt, steps, simulation, physicsMicros: _physicsClock.elapsedMicroseconds);
     super.update(dt);
   }
 

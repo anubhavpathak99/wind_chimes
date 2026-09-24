@@ -10,15 +10,17 @@ import '../render/chime_projection.dart';
 /// Lets a finger grab the nearest body and drag it. The simulation pulls the grabbed particle
 /// toward the finger with a damped spring, so letting go mid-swing flings it.
 ///
-/// The finger moves on a plane at the grabbed particle's depth, fixed at grab time.
-class ChimeDragInput extends PositionComponent with DragCallbacks {
-  ChimeDragInput(this.simulation, this.projection);
+/// The finger moves on a plane at the grabbed particle's depth, fixed at grab time. A tap that
+/// lands on no body is reported through [onEmptyTap].
+class ChimeDragInput extends PositionComponent with DragCallbacks, TapCallbacks {
+  ChimeDragInput(this.simulation, this.projection, {this.onEmptyTap});
 
   /// How far outside a body's drawn outline a touch still grabs it, logical pixels.
   static const grabSlop = 28.0;
 
   final ChimeSimulation simulation;
   final ChimeProjection projection;
+  final void Function()? onEmptyTap;
   final Float64List _point = Float64List(6);
 
   int? _pointer;
@@ -60,6 +62,12 @@ class ChimeDragInput extends PositionComponent with DragCallbacks {
     if (event.pointerId != _pointer) return;
     _pointer = null;
     simulation.inputs.release();
+  }
+
+  @override
+  void onTapUp(TapUpEvent event) {
+    final touch = event.canvasPosition;
+    if (_pick(touch.x, touch.y) < 0) onEmptyTap?.call();
   }
 
   /// Returns the particle to grab at canvas point ([x], [y]), or -1 if nothing is close enough.

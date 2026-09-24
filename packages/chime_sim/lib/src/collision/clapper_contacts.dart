@@ -143,6 +143,7 @@ final class ClapperContacts {
       final relSpeed = math.sqrt(rvx * rvx + rvy * rvy + rvz * rvz);
       _events.claim()
         ..rodId = k
+        ..otherRodId = -1
         ..impulse = (1 + _config.restitution) * closing / wSum
         ..normalSpeed = closing
         ..strikePos = t

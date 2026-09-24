@@ -109,4 +109,16 @@ void main() {
       expect((1200 * math.log(speed) / math.ln2).abs(), lessThanOrEqualTo(HitMapper.detuneCents));
     }
   });
+
+  test('a knock between two tubes sounds brighter and quieter than a clapper hit', () {
+    final m = mapper();
+    CollisionEvent clink() => hit(2, 2e-3)..otherRodId = 3;
+    expect(hardShare(m, clink), greaterThan(hardShare(m, () => hit(2, 2e-3)) + 0.2));
+    var clinkVolume = 0.0, hitVolume = 0.0;
+    for (var i = 0; i < 200; i++) {
+      clinkVolume += m.map(clink())!.volume;
+      hitVolume += m.map(hit(2, 2e-3))!.volume;
+    }
+    expect(clinkVolume, lessThan(hitVolume * 0.7));
+  });
 }

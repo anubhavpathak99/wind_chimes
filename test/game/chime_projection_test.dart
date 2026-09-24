@@ -83,4 +83,26 @@ void main() {
     expect(p.worldY, closeTo(-0.4, 1e-9));
     expect(p.worldZ, closeTo(0.02, 1e-9));
   });
+
+  test('an open sheet shrinks the chime into the space above it, and closing restores it', () {
+    final p = fitted();
+    final hookY = p.hookY;
+    p.visibleHeight = 0.45 * 844;
+    settle(p, minX: -0.07, maxX: 0.07);
+    expect(p.zoom, lessThan(0.5));
+    p.project(0, -0.9, 0);
+    expect(p.y, lessThan(0.45 * 844));
+    p.project(0, 0, 0);
+    expect(p.y, greaterThan(0));
+
+    p.visibleHeight = 844;
+    settle(p, minX: -0.07, maxX: 0.07);
+    expect(p.zoom, closeTo(1, 1e-6));
+    expect(p.hookY, closeTo(hookY, 1e-3));
+  });
+
+  test('never frames into less than 40% of the screen', () {
+    final p = fitted()..visibleHeight = 10;
+    expect(p.visibleHeight, closeTo(0.4 * 844, 1e-9));
+  });
 }
