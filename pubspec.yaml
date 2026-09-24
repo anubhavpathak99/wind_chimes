@@ -37,6 +37,7 @@ dependencies:
   flame: ^1.38.2
   chime_sim:
     path: packages/chime_sim
+  flutter_soloud: ^5.1.2
 
 dev_dependencies:
   flutter_test:

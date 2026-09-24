@@ -51,10 +51,16 @@ final class ClapperContacts {
 
   bool isTouching(int rod) => _touching[rod];
 
+  /// How many substeps [confine] had to pull the clapper back.
+  int get confinements => _confinements;
+  int _confinements = 0;
+  bool _inside = true;
+
   void reset() {
     _touching.fillRange(0, _touching.length, false);
     _active.fillRange(0, _active.length, false);
     _lastEvent.fillRange(0, _lastEvent.length, double.negativeInfinity);
+    _inside = true;
   }
 
   void solvePositions(double time) {
@@ -132,6 +138,47 @@ final class ClapperContacts {
         ..glancing = relSpeed > 0 ? 1 - closing / relSpeed : 0
         ..simTime = time;
     }
+  }
+
+  /// Safety net against the clapper escaping the ring sideways. Tubes are free pendulums, so a
+  /// clapper pressed hard enough between two of them can force them apart and slip out. While the
+  /// clapper is inside the ring and level with the tubes, its center is kept within the circle of
+  /// tube axes (measured at its own height); contacts stop it well inside that circle in normal
+  /// play. A clapper that is already outside, say lifted over the top by a finger, is left alone
+  /// until it comes back in.
+  void confine() {
+    final pos = _particles.position;
+    final c = 3 * clapper;
+    final cy = pos[c + 1];
+    var sumX = 0.0, sumZ = 0.0;
+    var levelWithTubes = true;
+    for (final rod in _rods) {
+      rod.top.eval(pos, _ends, 0);
+      rod.bottom.eval(pos, _ends, 3);
+      final dy = _ends[4] - _ends[1];
+      var t = dy.abs() > 1e-9 ? (cy - _ends[1]) / dy : 0.0;
+      if (t < 0 || t > 1) {
+        levelWithTubes = false;
+        t = t.clamp(0.0, 1.0);
+      }
+      sumX += _ends[0] + t * (_ends[3] - _ends[0]);
+      sumZ += _ends[2] + t * (_ends[5] - _ends[2]);
+    }
+    final centerX = sumX / _rods.length, centerZ = sumZ / _rods.length;
+    final dx = pos[c] - centerX, dz = pos[c + 2] - centerZ;
+    final dist = math.sqrt(dx * dx + dz * dz);
+    final limit = _config.ringRadius;
+    if (dist <= limit) {
+      _inside = true;
+      return;
+    }
+    if (!_inside || !levelWithTubes) {
+      _inside = false;
+      return;
+    }
+    _confinements++;
+    pos[c] = centerX + dx * limit / dist;
+    pos[c + 2] = centerZ + dz * limit / dist;
   }
 
   /// Restitution and friction. Below a closing speed of 2·g·h the bounce is dropped, which is

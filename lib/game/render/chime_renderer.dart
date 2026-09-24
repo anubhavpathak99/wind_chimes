@@ -80,7 +80,7 @@ class ChimeRenderer extends Component {
   @override
   void onGameResize(Vector2 size) {
     super.onGameResize(size);
-    final ppm = projection.pixelsPerMeter;
+    final ppm = projection.basePixelsPerMeter;
     final config = simulation.config;
     for (var k = 0; k < _rodPaints.length; k++) {
       final w = 2 * simulation.rods[k].spec.radius * ppm;
@@ -167,9 +167,9 @@ class ChimeRenderer extends Component {
         canvas
           ..save()
           ..translate(clapperX, clapperY)
-          ..scale(clapperScale)
-          ..drawCircle(
-              Offset.zero, simulation.config.clapperRadius * projection.pixelsPerMeter, _clapperPaint)
+          ..scale(clapperScale * projection.zoom)
+          ..drawCircle(Offset.zero,
+              simulation.config.clapperRadius * projection.basePixelsPerMeter, _clapperPaint)
           ..restore();
       } else {
         _drawRod(canvas, item);
@@ -217,12 +217,12 @@ class ChimeRenderer extends Component {
     canvas.drawLine(Offset(clapperX, clapperY), Offset(projection.x, projection.y), _stringPaint);
 
     projection.project(sx, sy, sz);
-    final ppm = projection.pixelsPerMeter;
+    final ppm = projection.basePixelsPerMeter;
     canvas
       ..save()
       ..translate(projection.x, projection.y)
       ..rotate(math.atan2(-(projection.x - clapperX), projection.y - clapperY))
-      ..scale(projection.scale)
+      ..scale(projection.scale * projection.zoom)
       ..drawRRect(
         RRect.fromRectAndRadius(
           Rect.fromCenter(
@@ -243,13 +243,14 @@ class ChimeRenderer extends Component {
     canvas.drawLine(Offset(_rodScreen[o + 6], _rodScreen[o + 7]), Offset(x0, y0), _stringPaint);
 
     final length = math.sqrt(dx * dx + dy * dy);
-    final w = 2 * simulation.rods[k].spec.radius * projection.pixelsPerMeter;
+    // Widths use the base scale the shader was built for; zoom is applied on the canvas.
+    final w = 2 * simulation.rods[k].spec.radius * projection.basePixelsPerMeter;
     final body = RRect.fromLTRBR(-w / 2, 0, w / 2, length, Radius.circular(w * 0.2));
     canvas
       ..save()
       ..translate(x0, y0)
       ..rotate(math.atan2(-dx, dy))
-      ..scale(scale, 1)
+      ..scale(scale * projection.zoom, 1)
       ..drawRRect(body, _rodPaints[k])
       ..drawOval(
         Rect.fromCenter(center: Offset(0, length - w * 0.08), width: w * 0.8, height: w * 0.28),

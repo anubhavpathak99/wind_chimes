@@ -8,7 +8,8 @@ final class Particles {
         previous = Float64List(count * 3),
         velocity = Float64List(count * 3),
         inverseMass = Float64List(count),
-        drag = Float64List(count);
+        drag = Float64List(count),
+        dragAxis = Int32List(count)..fillRange(0, count, -1);
 
   final int count;
   final Float64List position;
@@ -22,6 +23,10 @@ final class Particles {
 
   /// Quadratic drag factor ½·ρ·C_d·A, kg/m.
   final Float64List drag;
+
+  /// For slender or flat bodies, the particle whose direction from this one is the body's axis:
+  /// only the flow across that axis creates drag (the cross-flow principle). -1 = isotropic.
+  final Int32List dragAxis;
 }
 
 /// A point expressed as `c0·x[i0] + c1·x[i1] + offset`.

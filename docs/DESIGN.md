@@ -3,7 +3,8 @@
 A physically simulated wind chime for iOS and Android, built with Flutter + Flame. Its movement and
 sound respond to real-world wind and to how the phone is held, tilted and shaken.
 
-**Status:** Phases 0–1 done (simulation core, 2.5D renderer, drag/fling, debug overlay). Next: Phase 2.
+**Status:** Phases 0–2 done (simulation core, 2.5D renderer, drag/fling, wind model, tuning harness,
+placeholder audio, camera framing). Next: Phase 3 (audio). See [Phase 2 tuning notes](#phase-2-tuning-notes).
 See [Roadmap](#g-implementation-roadmap).
 
 ---
@@ -180,6 +181,10 @@ k_i = ½·ρ·C_d·A_i   (ρ = 1.2 kg/m³)
 ```
 
 - Drag on *relative* velocity gives aerodynamic damping for free.
+- **Cross-flow drag for the tubes and the sail:** only the part of the relative wind across the
+  body's axis pushes it (for the sail, the axis is its string). A sail blown up at an angle θ catches
+  wind in proportion to cos²θ, so it can't fly flat out; without this, strong wind drove the clapper
+  straight through the ring.
 - The small linear damping term lets the chime settle in still air, because quadratic drag vanishes
   at low speed.
 
@@ -189,14 +194,15 @@ k_i = ½·ρ·C_d·A_i   (ρ = 1.2 kg/m³)
 |---|---|
 | Top rope | 0.12 m |
 | Mount | Wood disc r = 0.07 m, 0.12 kg |
-| Rods | Aluminium tube Ø18 mm, 1 mm wall (~0.144 kg/m), 5 cm strings, ring R = 5.2 cm. Lengths from pitch: a free tube's frequency goes as 1/L², so **L_k = L_ref·√(f_ref / f_k)**. Longer rods look and sound lower. |
-| Clapper | Ø50 mm, 0.03 kg, centered at ~60% of the shortest rod's length. It must be wider than the opening between neighbouring tubes (43 mm here), or it escapes the ring. |
-| Sail | 9 × 13 cm, 12 g, C_d 1.2, hanging clear below the longest rod |
-| Restitution e | 0.5 (wood clapper) to 0.75 (metal) |
+| Rods | Aluminium tube Ø18 mm, 1 mm wall (~0.144 kg/m), 5 cm strings, ring R = 4.6 cm (12 mm clearance to the clapper). Lengths from pitch: a free tube's frequency goes as 1/L², so **L_k = L_ref·√(f_ref / f_k)**. Longer rods look and sound lower. |
+| Clapper | Ø50 mm, 35 g, centered at ~60% of the shortest rod's length. It must be wider than the opening between neighbouring tubes (36 mm here), or it escapes the ring. |
+| Sail | 9 × 13 cm, 15 g, C_d 1.2, hanging clear below the longest rod |
+| Restitution e | 0.65 (0.5 wood to 0.75 metal) |
+| Linear damping | 0.05/s: a swing takes ~20 s to die away in still air |
 
-At 3 m/s this gives ~2 m/s² of lateral push on the sail + clapper against ~0.6 m/s² on the rods: a
-few centimetres of relative displacement against a gap of ~1.8 cm. Real units and real wind speeds
-land in a believable regime, so tuning happens in exposure and turbulence, not arbitrary constants.
+Real units and real wind speeds land in a believable regime, so tuning happens in exposure,
+turbulence and a few physical parameters rather than arbitrary constants. These values came out of
+the Phase 2 tuning sweep (see the notes below).
 
 ### B3. Integration and collisions
 
@@ -257,8 +263,19 @@ substep; clapper + rod radii are ~34 mm, so it cannot tunnel and no continuous c
 needed. Speeds are clamped at 6 m/s. A non-finite state resets the chime to its rest pose. The renderer
 draws `lerp(previousStep, currentStep, accumulator/Δt)`.
 
+**Cage.** Tubes are free pendulums, so a clapper pressed hard between two of them can force them
+apart and slip out of the ring. While the clapper is inside and level with the tubes, its center is
+kept within the circle of tube axes at its own height. It only stops crossings (a clapper lifted out
+over the top by a finger is left alone) and engages in under 1% of substeps below gale force.
+
 **2.5D projection.** Orthographic, camera pitched ~10° upward (you look up at a hanging chime), weak
 perspective scale `D/(D − depth)`, painter's order by depth, back rods slightly darkened.
+
+**Camera framing.** A chime blown sideways is wide and short, and on a portrait screen it would leave
+the frame. The camera frames a box from the hook to the chime's lowest point across its horizontal
+extent: it pans to the box, zooms out (never in past the rest framing) if the box doesn't fit, and
+centers it vertically. The box widens at once and narrows over ~4 s, so gust peaks stay in view
+without the camera hunting. It holds still while a finger drags.
 
 ### B4. Wind: from API to force
 
@@ -310,13 +327,17 @@ fewer calls, smooth transitions, and hours of offline data.
    10 m mast. Exposed to users as a "Placement" setting.
 2. **Soft cap:** U_e = U_c·tanh(U_p/U_c), U_c ≈ 8 m/s. Storms stay wild without breaking.
 3. **User sensitivity** multiplier.
-4. **Turbulence:** u(t) = U(t)·(1 + I·n(t)) + gust(t)
-   - n: Ornstein–Uhlenbeck process, unit variance, T ≈ 2 s. Exact update at any step size:
-     `n ← n·e^(−h/T) + √(1−e^(−2h/T))·N(0,1)`
-   - Turbulence intensity I ≈ 0.15 (open) to 0.35 (sheltered), tied to exposure.
-   - Gusts: Poisson arrivals, ~1 per 10–20 s, more often when the gust factor G = gust/mean is high.
-     Amplitude ≈ U(0.3, 1)·(G−1)·U, shaped as a 1−cos pulse over 2–5 s.
-   - Direction wander: θ(t) = θ̄ + σ·n₂(t), σ ≈ 10–20°.
+4. **Turbulence:** along the wind u = U + σ·n_along + gust(t); across it v = 0.75·σ·n_across;
+   σ = I·U.
+   - Each n is the sum of two Ornstein–Uhlenbeck processes (unit variance), for large eddies
+     (T = 2.5 s, 65% of the variance) and small ones (T = 0.4 s, 35%). A single slow process put almost
+     no energy near the chime's ~1 Hz swing, so light wind never rang it. Exact update at any step
+     size: `n ← n·e^(−h/T) + √(1−e^(−2h/T))·N(0,1)`
+   - Turbulence intensity I ≈ 0.15 (open) to 0.35 (sheltered), tied to exposure, plus up to 0.25 in
+     light wind (fading with a 1.5 m/s scale): light winds are relatively gustier.
+   - Gusts: Poisson arrivals at (G−1)·(2/15) per second (one per 15 s at G = 1.5), where G =
+     gust/mean. Amplitude ≈ U(0.3, 1)·(G−1)·U, shaped as a 1−cos pulse over 2–5 s.
+   - Direction meander: θ(t) = θ̄ + 10°·n(t) with T = 6 s.
 5. **Gust delay across the chime:** particle i reads the noise at t − (x_i·ê)/U, so upwind rods feel a
    gust first (ring buffer of ~100 ms of noise history).
 6. Apply the drag formula from B2.
@@ -512,8 +533,9 @@ because it is how the physics gets tested.
 | **6. UI shell** | Controls sheet, settings persistence, first-run flow, auto-hiding overlays | Sound within ~1 s of opening; no permission prompt blocks it |
 | **7. Polish** | Tube shading, sail cloth look, time-of-day sky, wind-carried particles, haptics during touch/shake, mount rotation, rod–rod clinks, low-end Android profiling, battery test | 60 fps on a mid-range Android; ≤~5%/h battery |
 
-Phase 2 hit-rate targets (starting point): 1 m/s ≈ 0.1–0.3 hits/s, 3 m/s ≈ 0.5–1.5, 6 m/s ≈ 2–4,
-10 m/s ≤ 8.
+Phase 2 hit-rate targets, by reported 10 m wind in a garden with gust factor 1.5: 1 m/s ≤ 0.1
+hits/s, 3 m/s 0.5–1.5, 6 m/s 1.5–3.5, 10 m/s 2–5. See [Phase 2 tuning notes](#phase-2-tuning-notes)
+for why these differ from the first draft.
 
 ### UI / UX
 
@@ -530,6 +552,36 @@ Phase 2 hit-rate targets (starting point): 1 m/s ≈ 0.1–0.3 hits/s, 3 m/s ≈
   asks for location.
 
 ---
+
+### Phase 2 tuning notes
+
+Measured with `dart run tool/harness.dart` in `packages/chime_sim` (garden, gust factor 1.5, 120 s per
+speed):
+
+| 10 m wind (m/s) | 1 | 2 | 3 | 4 | 6 | 10 | 14 | 20 |
+|---|---|---|---|---|---|---|---|---|
+| hits/s | 0 | 0.32 | 1.18 | 1.68 | 2.03 | 2.77 | 3.27 | 3.42 |
+| clapper caged | 0% | 0% | 0% | 0% | 0% | 0.1% | 0.9% | 3% |
+
+- **The first draft's targets were revised.** 1 m/s → 0.1–0.3 hits/s was not physically reachable: at
+  1 m/s the chime feels ~0.6 m/s, which pushes the sail with ~0.5% of its weight, a ~1 mm sway against
+  a 12 mm gap. Real chimes are essentially silent in light air too; the planned "Calm days: gentle"
+  setting is the answer for users who want sound. At the top end a single clapper saturates around
+  3 hits/s, so 10 m/s was 3–8 and is now 2–5. Rod–rod clinks (Phase 7) will add to it, and wind
+  strength also shows in how hard tubes are struck: median impulse rises from 1.7 mN·s at 3 m/s to
+  2.4 mN·s at 10 m/s.
+- **What moved the curve:** cross-flow drag (stops the clapper wedging out in strong wind), two-scale
+  turbulence and light-wind gustiness (make 2–3 m/s ring), a heavier clapper and sail (35 g, 15 g) and
+  a smaller gap (12 mm).
+- **Tests pin the curve:** `test/wind_response_test.dart` fails if a change moves any target speed out
+  of its band, if stronger wind stops striking harder, or if the clapper leaves the ring in a gale.
+
+**Placeholder audio.** Until recorded samples arrive (Phase 3), each tube's tone is synthesized at
+startup from the tube's physics: decaying partials at the free-tube mode ratios, higher modes dying
+faster, each split into two close frequencies for shimmer, plus a strike click. `HitMapper` maps the
+impulse to loudness logarithmically (−30 dB to 0 dB), pans by the tube's place on the ring and adds
+±6 cents of detune and ±1.5 dB of jitter. On web, audio starts on the first touch (browser autoplay
+rule).
 
 ## H. MVP Definition
 

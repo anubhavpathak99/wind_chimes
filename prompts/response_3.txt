@@ -1,0 +1,42 @@
+Launch configurations are set up and Phase 2 is done. All 32 physics tests and 19 app tests pass, and I ran the app on Android and in Chrome. I haven't heard any of it: the emulator had audio off and headless Chrome can't play sound. So listening on a real phone is the one check left for you.
+
+Launch configurations (.vscode/launch.json)
+
+There are configs for Android emulator, iOS Simulator / iPhone, macOS, Web (Chrome), "Selected device" (whatever is picked in the status bar, e.g. a physical phone), "Selected device (profile)" for realistic performance, and the chime_sim tests. They replace the generic Chrome template VS Code had generated.
+VS Code had no Flutter SDK configured and flutter isn't on your PATH, so these would have failed. I ran fvm use stable, which adds .fvmrc, points .vscode/settings.json at .fvm/versions/stable, and adds .fvm/ to .gitignore.
+iOS and macOS need Xcode, which isn't installed.
+Phase 2
+
+Wind model (wind_field.dart): it takes the reported wind, scales it by where the chime hangs (sheltered, garden or open), softly caps storms, and eases to new values. It adds two-scale turbulence, gusts sized by the gust factor, and a slowly wandering direction. Gusts reach the upwind tubes first.
+
+Tuning harness: dart run tool/harness.dart in packages/chime_sim measures hit rate and hit strength across wind speeds; 11 speeds take under a second. With garden placement:
+
+10 m wind (m/s)	1	2	3	6	10	20
+hits/s	0	0.32	1.18	2.03	2.77	3.42
+Placeholder audio: each tube's tone is synthesized at startup from its physics, so it plays at the tube's real pitch with no audio files. Loudness follows the hit's strength, tubes are panned by their place on the ring, and every hit gets a slight random detune. On web, audio starts on the first touch because browsers require it.
+
+Manual wind panel: sliders for speed, direction and gusts, plus a placement switch. It's collapsed to a one-line summary by default.
+
+Camera framing: the camera pans and zooms out so a chime blown sideways stays in frame. The first strong-wind run pushed the whole chime off the right edge.
+
+Physics problems the tuning found and fixed
+
+The clapper escaped the ring in strong wind. The sail pushed like a sphere, so it flew almost flat and forced the clapper out between two tubes. Now only wind across a tube's or the sail's axis pushes it, so a raised sail catches less. A one-way cage catches rare escapes: it engages in under 1% of substeps below gale force and 3% in a 20 m/s gale.
+Light wind never rang the chime. The single slow turbulence component had almost no energy near the chime's ~1 Hz swing. Adding fast eddies, and making light winds relatively gustier, fixed it.
+New default parameters: 35 g clapper, 15 g sail, 12 mm gap between clapper and tubes, damping 0.05/s. docs/DESIGN.md records these and why.
+Decision for you: I changed two of the design's hit-rate targets.
+
+1 m/s: the design asked for 0.1–0.3 hits/s, which isn't physically reachable. The chime feels about 0.6 m/s, which moves the sail about 1 mm against the 12 mm gap, and real chimes are silent in air that light too. The target is now at most 0.1. The planned "Calm days: gentle" setting covers people who want sound anyway.
+10 m/s: the design asked for 3–8 hits/s; I lowered it to 2–5. A single clapper levels off around 3 hits/s. Stronger wind still sounds stronger because hits get harder, and tube-on-tube clinks in Phase 7 will add more.
+If you'd rather keep the original targets, the physics would need to become less realistic to meet them.
+
+Checked
+
+A debug APK builds, which confirms the audio library's C++ compiles for Android.
+On the Android emulator, the app runs and the audio engine starts. The emulator's software rendering drew 40 fps, but the physics kept exact time.
+In Chrome, the wind panel's controls work and the chime responds to them.
+Things to know
+
+Audio doesn't pause when the app goes to the background yet; that's planned for Phase 3.
+On web, audio runs single-threaded unless the site is served with cross-origin isolation headers. This only matters if web becomes a real target.
+Next is Phase 3: recorded sample layers, polyphony control, reverb, the wind ambience bed, and handling audio interruptions and backgrounding.

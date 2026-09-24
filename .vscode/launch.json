@@ -1,15 +1,59 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    // Flutter launch configurations (Dart-Code extension).
+    // "deviceId" is matched against device IDs and names by exact match or prefix
+    // (see `flutter devices`). Configs without a deviceId use the device selected
+    // in the VS Code status bar.
     "version": "0.2.0",
     "configurations": [
         {
-            "type": "chrome",
+            "name": "Android (emulator)",
+            "type": "dart",
             "request": "launch",
-            "name": "Launch Chrome against localhost",
-            "url": "http://localhost:8080",
-            "webRoot": "${workspaceFolder}"
+            "program": "lib/main.dart",
+            "deviceId": "emulator"
+        },
+        {
+            "name": "iOS (Simulator / iPhone)",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart",
+            "deviceId": "iPhone"
+        },
+        {
+            "name": "macOS",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart",
+            "deviceId": "macos"
+        },
+        {
+            "name": "Web (Chrome)",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart",
+            "deviceId": "chrome"
+        },
+        {
+            "name": "Selected device",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart"
+        },
+        {
+            // Profile mode: realistic performance, debug panel still visible.
+            // Needs a physical phone for iOS (not supported on the Simulator).
+            "name": "Selected device (profile)",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "chime_sim tests",
+            "type": "dart",
+            "request": "launch",
+            "program": "${workspaceFolder}/packages/chime_sim/test/",
+            "cwd": "${workspaceFolder}/packages/chime_sim"
         }
     ]
 }

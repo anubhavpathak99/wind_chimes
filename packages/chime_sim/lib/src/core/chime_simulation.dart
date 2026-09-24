@@ -5,6 +5,7 @@ import '../collision/clapper_contacts.dart';
 import '../config/chime_config.dart';
 import '../events/collision_event.dart';
 import '../inputs/sim_inputs.dart';
+import '../wind/wind_field.dart';
 import 'particles.dart';
 import 'rod_body.dart';
 
@@ -13,9 +14,11 @@ import 'rod_body.dart';
 ///
 /// Call [advance] once per rendered frame. It runs whole fixed steps of [stepDt], each split into
 /// [substeps], and keeps the remainder so the renderer can interpolate with
-/// [interpolatedPositions]. Impacts are queued in [events].
+/// [interpolatedPositions]. Impacts are queued in [events]. [seed] makes the wind reproducible.
 final class ChimeSimulation {
-  ChimeSimulation(this.config, {SimInputs? inputs}) : inputs = inputs ?? SimInputs() {
+  ChimeSimulation(this.config, {SimInputs? inputs, int seed = 1})
+      : inputs = inputs ?? SimInputs(),
+        wind = WindField(stepDt: stepDt, seed: seed) {
     _build();
     reset();
   }
@@ -34,6 +37,7 @@ final class ChimeSimulation {
   final ChimeConfig config;
   final SimInputs inputs;
   final EventRing events = EventRing(64);
+  final WindField wind;
 
   late final Particles particles;
   late final List<RodBody> rods;
@@ -41,6 +45,9 @@ final class ChimeSimulation {
   late final ClapperContacts _contacts;
   late final Float64List _rest;
   late final Float64List _stepStart;
+
+  /// Wind velocity at each particle for the current step, packed as x, z pairs.
+  late final Float64List _windAt;
   final Float64List _pa = Float64List(3);
   final Float64List _pb = Float64List(3);
 
@@ -60,6 +67,9 @@ final class ChimeSimulation {
 
   bool isTouchingRod(int rod) => _contacts.isTouching(rod);
 
+  /// Substeps in which the clapper had to be kept from escaping the ring. Should stay rare.
+  int get clapperConfinements => _contacts.confinements;
+
   /// Advances by one rendered frame. Returns the number of fixed steps run.
   int advance(double frameDt) {
     if (!(frameDt > 0)) return 0;
@@ -77,6 +87,11 @@ final class ChimeSimulation {
   /// Runs exactly one fixed step.
   void step() {
     _stepStart.setAll(0, particles.position);
+    wind.step(inputs);
+    final pos = particles.position;
+    for (var i = 0; i < particles.count; i++) {
+      wind.sampleAt(pos[3 * i], pos[3 * i + 2], _windAt, 2 * i);
+    }
     const h = stepDt / substeps;
     for (var s = 1; s <= substeps; s++) {
       _substep(h, _time + s * h);
@@ -149,6 +164,7 @@ final class ChimeSimulation {
     final vel = particles.velocity;
     final w = particles.inverseMass;
     final drag = particles.drag;
+    final dragAxis = particles.dragAxis;
 
     final gx = config.gravity * inputs.gravityDirX - inputs.deviceAccelX;
     final gy = config.gravity * inputs.gravityDirY - inputs.deviceAccelY;
@@ -165,11 +181,25 @@ final class ChimeSimulation {
       final k = 3 * i;
       var vx = vel[k], vy = vel[k + 1], vz = vel[k + 2];
 
-      // Quadratic drag in still air; Phase 2 makes this relative to the local wind.
-      final dragPerSpeed = drag[i] * wi * math.sqrt(vx * vx + vy * vy + vz * vz);
-      var ax = gx - dragPerSpeed * vx;
-      var ay = gy - dragPerSpeed * vy;
-      var az = gz - dragPerSpeed * vz;
+      // Quadratic drag on the velocity relative to the local wind; for tubes and the sail, only
+      // its part across the body's axis. A sail blown up at an angle therefore catches less wind.
+      var rx = _windAt[2 * i] - vx, ry = -vy, rz = _windAt[2 * i + 1] - vz;
+      final axis = dragAxis[i];
+      if (axis >= 0) {
+        final j = 3 * axis;
+        final dx = pos[k] - pos[j], dy = pos[k + 1] - pos[j + 1], dz = pos[k + 2] - pos[j + 2];
+        final lengthSq = dx * dx + dy * dy + dz * dz;
+        if (lengthSq > 1e-12) {
+          final along = (rx * dx + ry * dy + rz * dz) / lengthSq;
+          rx -= along * dx;
+          ry -= along * dy;
+          rz -= along * dz;
+        }
+      }
+      final dragPerSpeed = drag[i] * wi * math.sqrt(rx * rx + ry * ry + rz * rz);
+      var ax = gx + dragPerSpeed * rx;
+      var ay = gy + dragPerSpeed * ry;
+      var az = gz + dragPerSpeed * rz;
 
       if (i == touch) {
         var tx = spring * (inputs.touchX - pos[k]) - touchDamping * vx;
@@ -205,6 +235,7 @@ final class ChimeSimulation {
       _solveLink(link);
     }
     _contacts.solvePositions(time);
+    _contacts.confine();
 
     final invH = 1 / h;
     for (var i = 0; i < pos.length; i++) {
@@ -261,6 +292,7 @@ final class ChimeSimulation {
     particles = Particles(3 + 2 * rodCount);
     _rest = Float64List(particles.count * 3);
     _stepStart = Float64List(particles.count * 3);
+    _windAt = Float64List(particles.count * 2);
     final w = particles.inverseMass;
     final drag = particles.drag;
     double dragFactor(double cd, double area) => 0.5 * config.airDensity * cd * area;
@@ -279,6 +311,7 @@ final class ChimeSimulation {
     _setRest(sailIndex, 0, mountY - config.sailCenterDrop, 0);
     w[sailIndex] = 1 / config.sailMass;
     drag[sailIndex] = dragFactor(1.2, config.sailWidth * config.sailHeight);
+    particles.dragAxis[sailIndex] = clapperIndex;
 
     const hook = PointRef.fixed(0, 0, 0);
     const mount = PointRef.particle(mountIndex);
@@ -307,6 +340,8 @@ final class ChimeSimulation {
       w[rod.upper] = w[rod.lower] = 2 / spec.mass;
       drag[rod.upper] =
           drag[rod.lower] = dragFactor(spec.dragCoefficient, 2 * spec.radius * spec.length) / 2;
+      particles.dragAxis[rod.upper] = rod.lower;
+      particles.dragAxis[rod.lower] = rod.upper;
 
       links
         ..add(Link(PointRef.particle(rod.upper), PointRef.particle(rod.lower),
