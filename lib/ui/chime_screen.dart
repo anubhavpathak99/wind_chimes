@@ -29,17 +29,22 @@ class _ChimeScreenState extends State<ChimeScreen> {
   final _stats = DebugStats();
   late final _simulation = ChimeSimulation(ChimeConfig.pentatonicAluminium());
   late final _audio = ChimeAudio(_simulation.rods);
+  late final _isPressing = _simulation.isPressingRod;
   late final _game = WindChimeGame(
     simulation: _simulation,
     collisionSinks: [_audio, _stats],
+    onFrame: _audioFrame,
     stats: _stats,
   );
+  late final AppLifecycleListener _lifecycle;
   var _wind = const ManualWind();
   var _windPanelOpen = false;
 
   @override
   void initState() {
     super.initState();
+    // Fade the sound out when the app leaves the screen, and back in when it returns.
+    _lifecycle = AppLifecycleListener(onHide: _audio.suspend, onShow: _audio.resume);
     _wind.applyTo(_simulation.inputs);
     if (!widget.audioEnabled) {
       _audio.status.value = 'disabled';
@@ -53,10 +58,14 @@ class _ChimeScreenState extends State<ChimeScreen> {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _audio.dispose();
     _stats.dispose();
     super.dispose();
   }
+
+  void _audioFrame(double dt) =>
+      _audio.update(dt, windSpeed: _simulation.wind.speed, isPressing: _isPressing);
 
   void _setWind(ManualWind wind) {
     setState(() => _wind = wind);

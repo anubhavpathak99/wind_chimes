@@ -113,6 +113,24 @@ void main() {
     expect(sim.isTouchingRod(rod), isTrue);
   });
 
+  test('pressing means real contact: held against a tube, not hovering after a hit', () {
+    final sim = newSim();
+    const rod = 1;
+    final start = positionOf(sim, clapper);
+    final dir = towardRod(sim, rod);
+    sim.inputs.grab(clapper, start.x + dir.x * 0.06, start.y, start.z + dir.z * 0.06);
+    run(sim, 2);
+    var pressed = 0;
+    run(sim, 1, () => pressed += sim.isPressingRod(rod) ? 1 : 0);
+    expect(pressed, greaterThan(115));
+
+    sim.inputs.release();
+    run(sim, 3);
+    var pressedWhileFree = 0;
+    run(sim, 5, () => pressedWhileFree += sim.isPressingRod(rod) ? 1 : 0);
+    expect(pressedWhileFree, lessThan(5 * 120 * 0.2));
+  });
+
   test('energy only decays after a fling', () {
     final restEnergy = settledRestEnergy();
     final sim = newSim();

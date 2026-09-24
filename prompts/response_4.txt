@@ -1,0 +1,55 @@
+Phase 3 is done: all 33 physics and 40 app tests pass, and it runs on web and on the Android emulator. The real "done" test for this phase is by ear, though, so it needs you to listen: five minutes of breeze shouldn't sound looped, nothing should click, and a storm should stay musical. My checks confirm the mechanics; the emulator had audio off and the browser was headless, so I haven't heard any of it.
+
+What's new
+
+Sample bank synthesized from the tube physics. There are no recordings, so every tube gets 8 samples generated at startup, 40 in all, in about 0.2 s:
+
+2 strike hardnesses. A harder, shorter strike reaches higher partials, so it sounds brighter.
+2 strike positions. A hit at the middle of a tube can't sound its second partial, so moving the strike point changes the timbre.
+2 takes for alternation.
+The layout is data, so real recordings can replace the synthesis later without other changes. Decoded, the bank uses about 26 MB of memory.
+
+Choosing each sound: loudness follows hit strength. The hard layer blends in gradually with random overlap, so the switch is never audible; glancing blows sound duller. A tube never plays the same sample twice in a row.
+
+Voice management:
+
+at most 3 voices per tube and 24 overall;
+old voices always fade out rather than being cut, so no clicks;
+soft hits are skipped once there are more than 10 hits per second;
+a clapper resting on a ringing tube muffles it.
+Wind ambience follows the live wind, so you hear a gust just before the chime answers it.
+
+Mix: a global reverb, then a limiter.
+
+Audio session and app lifecycle:
+
+on iOS the ringer switch won't silence the chime, and other apps' music can play alongside;
+on Android it plays as media without taking audio focus;
+phone calls and leaving the app fade the sound out and pause the audio hardware; returning fades it back in.
+Two physics problems the audio work exposed, now fixed
+
+Muffling fired far too often. On the first run, 79% of breeze notes got damped. The contact solver refused to bounce anything slower than 4 cm/s, and a breeze's taps land at 2–6 cm/s, so the clapper stuck to the tube. With a 1 cm/s threshold, damping drops to 22% at 3 m/s, and 43% at 6 m/s, where steady wind really does lean the clapper on the downwind tubes. Damping also now requires real contact, not just hovering within 1 mm.
+A string could stretch in a jam. The 10-minute stress test caught a tube string stretched 12% when the clapper jammed at the tube tops. A second constraint pass after contacts fixed it.
+Verified
+
+5-minute soak (real impacts through mapping and voice management):
+at 3 m/s: 346 notes, no back-to-back repeats on any tube, peak 9 voices;
+in a gale: peak 15 of 24 voices and nothing skipped;
+every voice stolen to make room fades out over at least 60 ms.
+Android emulator:
+runs at 60 fps with "audio on";
+going to the background and coming back works, with no errors.
+Web: audio starts on the first tap, with no console errors.
+Things to know
+
+Settings to tweak by ear:
+
+reverb amount (reverbWet in chime_audio.dart);
+wind ambience volume (maxVolume in wind_bed.dart);
+how strongly a resting clapper muffles a tube (dampedLevel in voice_allocator.dart);
+the two strike hardnesses (contactSeconds in tube_bank.dart).
+Tell me what you hear and I'll adjust them.
+
+An emulator was left running. The one I started for the Phase 2 check was still running because adb emu kill hadn't worked. I've now stopped it and the app process attached to it.
+
+docs/DESIGN.md now has a Phase 3 section with all of the above. Next is Phase 4: tilt rotates gravity, shaking becomes an inertial force, plus shake detection and a sensitivity setting.

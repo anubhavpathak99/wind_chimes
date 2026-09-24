@@ -21,6 +21,7 @@ final class ClapperContacts {
   })  : _rods = rods,
         _touching = List.filled(rods.length, false),
         _active = List.filled(rods.length, false),
+        _pressed = List.filled(rods.length, false),
         _lastEvent = Float64List(rods.length),
         _normal = Float64List(rods.length * 3),
         _upperWeight = Float64List(rods.length),
@@ -40,6 +41,9 @@ final class ClapperContacts {
 
   /// Penetrating during the current substep; needs a velocity pass.
   final List<bool> _active;
+
+  /// In actual contact at some substep of the current step.
+  final List<bool> _pressed;
   final Float64List _lastEvent;
   final Float64List _normal;
   final Float64List _upperWeight;
@@ -51,6 +55,11 @@ final class ClapperContacts {
 
   bool isTouching(int rod) => _touching[rod];
 
+  bool isPressing(int rod) => _pressed[rod];
+
+  /// Call at the start of every fixed step.
+  void beginStep() => _pressed.fillRange(0, _pressed.length, false);
+
   /// How many substeps [confine] had to pull the clapper back.
   int get confinements => _confinements;
   int _confinements = 0;
@@ -59,6 +68,7 @@ final class ClapperContacts {
   void reset() {
     _touching.fillRange(0, _touching.length, false);
     _active.fillRange(0, _active.length, false);
+    _pressed.fillRange(0, _pressed.length, false);
     _lastEvent.fillRange(0, _lastEvent.length, double.negativeInfinity);
     _inside = true;
   }
@@ -104,6 +114,7 @@ final class ClapperContacts {
       final vn = rvx * nx + rvy * ny + rvz * nz;
 
       _active[k] = true;
+      _pressed[k] = true;
       _normal[3 * k] = nx;
       _normal[3 * k + 1] = ny;
       _normal[3 * k + 2] = nz;
@@ -181,14 +192,13 @@ final class ClapperContacts {
     pos[c + 2] = centerZ + dz * limit / dist;
   }
 
-  /// Restitution and friction. Below a closing speed of 2·g·h the bounce is dropped, which is
+  /// Restitution and friction. Below [ChimeConfig.restingSpeed] the bounce is dropped, which is
   /// what lets resting contact settle instead of jittering.
-  void solveVelocities(double h) {
+  void solveVelocities() {
     final vel = _particles.velocity;
     final w = _particles.inverseMass;
     final c = 3 * clapper;
     final wc = w[clapper];
-    final bounceThreshold = 2 * _config.gravity * h;
 
     for (var k = 0; k < _rods.length; k++) {
       if (!_active[k]) continue;
@@ -205,7 +215,7 @@ final class ClapperContacts {
       final vn = rvx * nx + rvy * ny + rvz * nz;
 
       final before = _closingSpeed[k];
-      final target = -before > bounceThreshold ? -_config.restitution * before : 0.0;
+      final target = -before > _config.restingSpeed ? -_config.restitution * before : 0.0;
       final dvn = target - vn;
 
       var dx = dvn * nx, dy = dvn * ny, dz = dvn * nz;

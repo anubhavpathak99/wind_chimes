@@ -46,6 +46,7 @@ final class ChimeConfig {
     required this.sailMass,
     required this.sailStringLength,
     this.restitution = 0.65,
+    this.restingSpeed = 0.01,
     this.friction = 0.15,
     this.linearDamping = 0.05,
     this.gravity = 9.81,
@@ -110,6 +111,7 @@ final class ChimeConfig {
     double? clapperMass,
     double? sailMass,
     double? restitution,
+    double? restingSpeed,
     double? friction,
     double? linearDamping,
   }) =>
@@ -128,6 +130,7 @@ final class ChimeConfig {
         sailMass: sailMass ?? this.sailMass,
         sailStringLength: sailStringLength,
         restitution: restitution ?? this.restitution,
+        restingSpeed: restingSpeed ?? this.restingSpeed,
         friction: friction ?? this.friction,
         linearDamping: linearDamping ?? this.linearDamping,
         gravity: gravity,
@@ -167,6 +170,10 @@ final class ChimeConfig {
 
   /// Coefficient of restitution for clapper–tube impacts.
   final double restitution;
+
+  /// Impacts slower than this (m/s) don't bounce, so a clapper at rest against a tube settles
+  /// instead of jittering.
+  final double restingSpeed;
 
   /// Coulomb friction coefficient for clapper–tube contacts.
   final double friction;

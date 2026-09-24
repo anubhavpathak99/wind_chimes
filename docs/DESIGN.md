@@ -3,8 +3,9 @@
 A physically simulated wind chime for iOS and Android, built with Flutter + Flame. Its movement and
 sound respond to real-world wind and to how the phone is held, tilted and shaken.
 
-**Status:** Phases 0–2 done (simulation core, 2.5D renderer, drag/fling, wind model, tuning harness,
-placeholder audio, camera framing). Next: Phase 3 (audio). See [Phase 2 tuning notes](#phase-2-tuning-notes).
+**Status:** Phases 0–3 done (simulation core, 2.5D renderer, drag/fling, wind model, tuning harness,
+camera framing, audio engine). Next: Phase 4 (motion sensors). See
+[Phase 2 tuning notes](#phase-2-tuning-notes) and [Phase 3 audio notes](#phase-3-audio-notes).
 See [Roadmap](#g-implementation-roadmap).
 
 ---
@@ -242,6 +243,11 @@ J   = (1+e)·|v_n| / (w_c + w_q)     impulse, used by audio
 ```
 
 Because w_q depends on t, a hit near the bottom of a rod spins it more than a hit near the top.
+
+**Low-speed bounces.** Impacts slower than 1 cm/s don't bounce, so resting contact settles. (The
+usual 2·g·h threshold, 4 cm/s here, swallowed most of a breeze's gentle taps and left the clapper
+stuck to the tube.) After contacts, the constraints get a second pass so a clapper jammed against a
+tube can't stretch its string.
 
 **Events** are emitted only when all of these hold: the contact just began (with ~1 mm of separation
 hysteresis before it can begin again), |v_n| is above ~2 cm/s, and at least 30 ms have passed since
@@ -582,6 +588,53 @@ faster, each split into two close frequencies for shimmer, plus a strike click. 
 impulse to loudness logarithmically (−30 dB to 0 dB), pans by the tube's place on the ring and adds
 ±6 cents of detune and ±1.5 dB of jitter. On web, audio starts on the first touch (browser autoplay
 rule).
+
+### Phase 3 audio notes
+
+**Sample bank, synthesized from the tube physics** (`lib/audio/tube_synth.dart`, `tube_bank.dart`).
+There are no recordings yet, so every sample is generated at startup in a background isolate
+(~0.2 s): per tube, 2 strike hardnesses × 2 strike positions × 2 takes = 40 samples of 5 s at
+32 kHz (12.8 MB as WAV, ~26 MB once decoded by SoLoud), plus an 8 s seamless wind loop.
+
+- **Hardness** is the strike's contact time (0.6 ms soft, 0.25 ms hard); the half-sine pulse
+  spectrum `|cos(πfτ) / (1 − 4f²τ²)|` shapes which partials a strike reaches, so hard hits are
+  brighter.
+- **Strike position** weights each mode by the free–free mode shape at the contact point. The
+  middle (50%) cannot excite mode 2; off-center (62%) brings it in. The simulation's hits land at
+  45–62%, so both variants get used.
+- **Takes** differ in partial phases, the shimmer split and a hint of inharmonicity (±0.2% on
+  overtones only, so the tuning holds).
+- The layout is data (`TubeBankLayout`), so recorded samples can later replace synthesis without
+  touching the mapper or allocator.
+
+**Hit mapping** (`hit_mapper.dart`): intensity → dB as before; layer by intensity with a random
+overlap so the soft/hard switch is never audible, glancing blows darker; position variant nearest
+the contact point; takes chosen so a tube never plays the same sample twice running.
+
+**Voice allocation** (`voice_allocator.dart`, pure Dart, tested with a fake output):
+- ≤3 voices per tube, ≤24 overall; the oldest is stolen with a 60 ms fade, never cut.
+- Voice lifetimes come from sample length ÷ playback speed: nothing is polled from the engine.
+- Density limiter above 10 hits/s: hits below 0.2 intensity are skipped, the rest lose up to 6 dB.
+- Contact damping: when the clapper *presses* on a tube (actual contact, not the 1 mm re-strike
+  hysteresis) for 100 ms, that tube's voices fade to 35% over 0.4 s. Measured over 5 minutes, 22% of
+  voices get damped at 3 m/s and 43% at 6 m/s, where steady wind leans the clapper on the downwind
+  tubes.
+
+**Mix:** global freeverb (room 0.6, damp 0.5, wet 0.25), then a limiter (−3 dB threshold, −1 dB
+ceiling) last. Per-sound filters don't work on web, which is why brightness is baked into layers
+rather than filtered live.
+
+**Wind bed** (`wind_bed.dart`): the loop's volume and playback speed follow the instantaneous wind
+at the chime (silent below 0.3 m/s, up to −9 dB and 1.3× speed), so gusts are heard arriving.
+
+**Session and lifecycle:** iOS playback category with mix-with-others (not silenced by the ringer
+switch; music can play alongside); Android plays as media without taking audio focus. Interruptions
+and the app leaving the screen fade out over 250 ms and stop the audio device; returning restarts
+it and fades in over 800 ms. Background playback is not in the MVP.
+
+**Soak results** (5 simulated minutes, real impacts through mapper and allocator): at 3 m/s, 346
+voices, no tube ever repeated a sample back to back, peak 9 voices; in a 20 m/s gale, peak 15 of 24,
+no hits skipped. Every steal is a fade of ≥ 30 ms.
 
 ## H. MVP Definition
 

@@ -65,7 +65,13 @@ final class ChimeSimulation {
   /// Fraction of a fixed step elapsed since the last one, in [0, 1).
   double get interpolationAlpha => _accumulator / stepDt;
 
+  /// Whether the clapper counts as touching [rod]: in contact, or within the separation it
+  /// must clear before it can strike again.
   bool isTouchingRod(int rod) => _contacts.isTouching(rod);
+
+  /// Whether the clapper was actually pressing on [rod] during the last step. A tube pressed on
+  /// for a while is damped.
+  bool isPressingRod(int rod) => _contacts.isPressing(rod);
 
   /// Substeps in which the clapper had to be kept from escaping the ring. Should stay rare.
   int get clapperConfinements => _contacts.confinements;
@@ -87,6 +93,7 @@ final class ChimeSimulation {
   /// Runs exactly one fixed step.
   void step() {
     _stepStart.setAll(0, particles.position);
+    _contacts.beginStep();
     wind.step(inputs);
     final pos = particles.position;
     for (var i = 0; i < particles.count; i++) {
@@ -236,12 +243,17 @@ final class ChimeSimulation {
     }
     _contacts.solvePositions(time);
     _contacts.confine();
+    // Contacts can push a tube against its string; a second pass keeps a hard jam from
+    // stretching it.
+    for (final link in _links) {
+      _solveLink(link);
+    }
 
     final invH = 1 / h;
     for (var i = 0; i < pos.length; i++) {
       vel[i] = (pos[i] - prev[i]) * invH;
     }
-    _contacts.solveVelocities(h);
+    _contacts.solveVelocities();
 
     final maxSpeed = config.maxSpeed;
     for (var i = 0; i < particles.count; i++) {
