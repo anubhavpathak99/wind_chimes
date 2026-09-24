@@ -1,0 +1,484 @@
+Hey Claude!
+
+Act as a **senior Flutter + Flame developer** with strong experience building polished mobile UIs, 2D physics simulations, real-time sensor integrations, and audio-driven interactive experiences for **iOS and Android**.
+
+I want to build a **Wind Chime simulation app** using **Flutter + Flame**.
+
+The goal is to create a physically interactive wind-chime experience where the chime's movement and sound are influenced by both **real-world weather conditions** and **the user's physical interaction with the phone**.
+
+## Core Concept
+
+The app displays a **2D wind chime simulation**.
+
+The wind chime consists of:
+
+* A rope/string from which the chime hangs
+* Multiple vertical metal rods/tubes
+* A central hanging ball/clapper
+* Optional sail at the bottom
+* Simple physics-based movement
+* Collision detection between the ball and rods
+* Sound generated whenever the ball hits a rod
+
+The simulation should feel natural rather than behaving like a simple animation.
+
+---
+
+# 1. Real-World Wind Data
+
+Flutter should periodically obtain:
+
+* Wind speed
+* Wind direction
+
+using a suitable **free-tier weather API**.
+
+The data should then be passed into the Flame simulation.
+
+I want you to recommend:
+
+1. Suitable free/free-tier APIs
+2. How frequently we should fetch the data
+3. How to handle API failures/offline mode
+4. How to smooth/interpolate changing wind values
+5. How to convert real-world wind speed into an appropriate force inside the simulation
+
+For example:
+
+```text
+Weather API
+     ↓
+Flutter Repository
+     ↓
+WindState
+     ↓
+Flame Game
+     ↓
+Physics Simulation
+```
+
+---
+
+# 2. Device Sensors
+
+Use the phone's sensors to make the experience interactive.
+
+Potential inputs:
+
+### Gyroscope / accelerometer
+
+Detect:
+
+* Phone tilt
+* Rotation
+* Shaking
+* Sudden movement
+
+Map these physical movements to the wind-chime simulation.
+
+For example:
+
+```text
+Phone tilted right
+        ↓
+Wind chime shifts right
+
+Phone tilted left
+        ↓
+Wind chime shifts left
+
+Phone shaken
+        ↓
+Stronger chime movement
+        ↓
+More collisions
+```
+
+Please determine whether **gyroscope, accelerometer, or a combination of both** is technically more appropriate for each interaction.
+
+Also explain how we should:
+
+* Normalize sensor values
+* Apply smoothing
+* Avoid noisy/jittery movement
+* Detect meaningful shaking
+* Prevent unrealistic physics
+* Handle different device orientations
+
+---
+
+# 3. Flame Physics Simulation
+
+The Flame engine should be responsible for the actual 2D simulation.
+
+The simulation receives:
+
+```text
+windSpeed
+windDirection
+deviceTilt
+deviceShake
+```
+
+and calculates:
+
+* Wind force
+* Chime movement
+* Ball/clapper movement
+* Rod movement
+* Collisions
+* Collision intensity
+* Sound events
+
+The wind chime should behave like a physically plausible system.
+
+For example:
+
+```text
+Wind Speed
+    ↓
+Wind Force
+    ↓
+Chime/Sail movement
+    ↓
+Rope + Ball dynamics
+    ↓
+Ball trajectory
+    ↓
+Collision with rod
+    ↓
+Collision intensity
+    ↓
+Sound
+```
+
+I don't necessarily need perfect real-world physics, but the simulation should **feel believable and responsive**.
+
+Please recommend whether we should:
+
+* Build our own lightweight physics simulation
+* Use Flame's built-in components/physics capabilities
+* Use another Flutter/Flame-compatible physics approach
+
+Explain the tradeoffs.
+
+---
+
+# 4. Wind Chime Structure
+
+The prototype world should contain:
+
+```text
+                 Rope
+                  │
+                  │
+             ┌────┴────┐
+             │  Mount  │
+             └────┬────┘
+                  │
+       │     │    │    │     │
+       │     │    │    │     │
+      Rod   Rod  Rod  Rod   Rod
+
+                  ●
+               Clapper
+
+                  │
+                  │
+                 Sail
+```
+
+The exact visual design can be improved.
+
+The rods should be positioned around the central clapper.
+
+The clapper should move based on the physics simulation and collide with the rods.
+
+When a collision occurs, generate an event such as:
+
+```dart
+ChimeCollisionEvent(
+    rodId: 2,
+    intensity: 0.73,
+    velocity: 4.2,
+)
+```
+
+---
+
+# 5. Sound System
+
+The sound is a very important part of the experience.
+
+When the clapper hits a rod:
+
+```text
+Collision
+    ↓
+Calculate impact velocity
+    ↓
+Calculate intensity
+    ↓
+Select appropriate chime sound
+    ↓
+Play sound
+```
+
+The sound should vary based on:
+
+* Impact velocity
+* Rod size
+* Rod material
+* Collision angle
+* Random variation
+
+Avoid having the exact same sound play every time.
+
+I want the resulting audio to feel organic.
+
+Please recommend an appropriate architecture for the audio system and whether we should use:
+
+* Pre-recorded samples
+* Multiple samples per rod
+* Pitch shifting
+* Volume variation
+* Procedural audio
+* An audio package/library
+* Native audio APIs
+
+---
+
+# 6. Flutter ↔ Flame Architecture
+
+Design a clean architecture where Flutter handles application-level concerns and Flame handles the real-time simulation.
+
+I'm thinking something roughly like:
+
+```text
+Flutter
+│
+├── UI
+├── Weather API
+├── Sensor Service
+├── Settings
+├── Audio Configuration
+└── Application State
+        │
+        ▼
+      Flame
+        │
+        ├── Wind Chime World
+        ├── Physics
+        ├── Rods
+        ├── Clapper
+        ├── Rope
+        ├── Sail
+        ├── Collision Detection
+        └── Simulation Events
+```
+
+Please improve this architecture if necessary.
+
+I want clear boundaries between:
+
+* Flutter
+* Flame
+* Sensors
+* Weather
+* Physics
+* Audio
+
+and I want to avoid tightly coupling Flutter widgets with the Flame simulation.
+
+---
+
+# 7. Mobile Performance
+
+This needs to run smoothly on both:
+
+* iOS
+* Android
+
+Please consider:
+
+* 60 FPS target
+* Sensor update frequency
+* Weather API frequency
+* Physics timestep
+* Object allocation
+* Flame component lifecycle
+* Audio latency
+* Battery consumption
+* Background/foreground behavior
+* Different screen sizes and aspect ratios
+
+Explain what should run:
+
+* Every frame
+* At a fixed physics timestep
+* On sensor updates
+* On weather updates
+* On user interaction
+
+---
+
+# 8. UI / UX
+
+The UI should be **beautiful, minimal and immersive**.
+
+The simulation should be the main focus rather than looking like a traditional utility app.
+
+Think:
+
+> Open the app → immediately see and hear a beautiful wind chime responding to the environment.
+
+Suggest a UI/UX for:
+
+* Main simulation screen
+* Wind information
+* Sound controls
+* Chime customization
+* Sensitivity
+* Weather mode
+* Manual wind mode
+* Settings
+
+Keep the UI minimal and avoid unnecessary screens.
+
+---
+
+# 9. MVP → Production Roadmap
+
+Break the implementation into phases.
+
+### Phase 1 — Basic Flame prototype
+
+Create:
+
+* Rope
+* Rods
+* Clapper
+* Basic movement
+* Basic collision detection
+
+### Phase 2 — Physics
+
+Add:
+
+* Wind force
+* Gravity
+* Damping
+* Clapper dynamics
+* Rod movement
+* Collision intensity
+
+### Phase 3 — Audio
+
+Add:
+
+* Collision → sound
+* Multiple samples
+* Pitch variation
+* Volume/intensity mapping
+
+### Phase 4 — Device interaction
+
+Add:
+
+* Accelerometer
+* Gyroscope
+* Tilt
+* Shake detection
+
+### Phase 5 — Real weather
+
+Add:
+
+* Weather API
+* Wind speed
+* Wind direction
+* Mapping real-world values → simulation
+
+### Phase 6 — Polish
+
+Add:
+
+* Beautiful graphics
+* Animations
+* Particles
+* Lighting
+* Audio ambience
+* Haptics
+* Settings
+* Performance optimization
+
+---
+
+# 10. Important Questions
+
+Before proposing implementation, think deeply about the technical feasibility.
+
+Specifically answer:
+
+1. Is Flame appropriate for this type of physics simulation?
+2. Should I implement custom physics or use a physics engine?
+3. How should wind speed translate into force?
+4. How should wind direction influence the simulation?
+5. How should phone tilt influence the chime?
+6. How should shake detection work?
+7. How can collision intensity be converted into sound intensity?
+8. How can we prevent repetitive/artificial sounding chimes?
+9. What should be Flutter's responsibility vs Flame's responsibility?
+10. How should the architecture handle real-time data flowing into a 60 FPS simulation?
+11. What are the biggest technical risks?
+12. What should the MVP deliberately NOT implement?
+13. What packages/libraries would you recommend?
+14. What parts should be implemented natively on iOS/Android if Flutter packages aren't sufficient?
+
+---
+
+## Expected Output
+
+Don't jump directly into code.
+
+First provide:
+
+### A. System Architecture
+
+Show the complete architecture and data flow.
+
+### B. Physics Model
+
+Explain the physics model and equations/approximations we should use.
+
+### C. Sensor Model
+
+Explain how accelerometer/gyroscope data should be transformed into simulation inputs.
+
+### D. Audio Model
+
+Explain how collision data becomes natural-sounding chimes.
+
+### E. Flutter + Flame Project Structure
+
+Provide a recommended folder structure.
+
+### F. Package Selection
+
+Recommend packages and explain why each is needed.
+
+### G. Implementation Roadmap
+
+Give a step-by-step development plan where each phase produces a runnable milestone.
+
+### H. MVP Definition
+
+Clearly define the smallest version that proves the core idea.
+
+### I. Future Enhancements
+
+Suggest technically interesting features we can add after the MVP.
+
+Finally, identify **which parts are likely to be the hardest to implement correctly** and explain how you would approach them.
+
+Do not assume that my proposed architecture is correct. Challenge it where necessary and propose a better design if you see one.

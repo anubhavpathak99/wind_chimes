@@ -1,0 +1,31 @@
+Written for: you, plus anyone (or any later session) working in this repo, since docs/DESIGN.md lives there.
+
+I saved the design to docs/DESIGN.md and finished Phases 0 and 1. All 17 physics tests and 4 app tests pass, and the analyzer is clean. I couldn't run it on a phone or as a Mac app because Xcode isn't installed here, so I ran it in headless Chrome at phone size. A drag-and-fling on the clapper and sail produced 11 hits across 3 of the 5 tubes, with 0 resets and no console errors.
+
+What's there
+
+Physics package in packages/chime_sim/, pure Dart with no Flutter or Flame imports.
+3D particle physics, 4 substeps per 120 Hz step.
+Tubes whose lengths come from their pitch: C5 works out to 45.5 cm for an 18 mm aluminium tube.
+Clapper–tube collisions; holding the clapper against a tube doesn't keep re-triggering hits.
+Hits are reported through a fixed-size event buffer that never allocates.
+A speed limit and automatic reset if the numbers ever go invalid.
+Game layer in lib/game/: the Flame loop, a 2.5D renderer that draws back to front and flashes a tube when it's struck, and drag/fling input. lib/main.dart locks portrait.
+Debug overlay in lib/ui/overlays/debug_panel.dart: fps, physics steps per frame, and each hit's tube, impulse, speed and strike point. It's hidden in release builds.
+What the tests cover
+
+The rest pose is stable.
+A fling toward each tube hits that tube first.
+A clapper held against a tube goes silent once it settles.
+Energy only decreases after a fling.
+10 simulated minutes of random grabs, tilts and shaking stay finite, under the speed limit, and with every string intact.
+Bugs the testing caught
+
+The clapper could escape the ring. The 45 mm clapper fit through the 46.7 mm opening between two tubes, with 0.8 mm to spare. I changed the ring radius to 5.2 cm and the clapper to 50 mm (7 mm too big to pass), added a test, and updated the design doc.
+The hook was drawn 9 px lower than intended because of the camera tilt. Fixed and tested.
+Things to know
+
+Run it on a real phone. Install Xcode for iOS, or connect an Android device and run ~/fvm/versions/stable/bin/flutter run (the SDK isn't on your PATH). Touch feel and frame rate on a phone are what count.
+I left out Riverpod for now. The design lists it, but there are no controllers for it to manage until Phases 4–5.
+Running the web check needed a Node install (playwright-core) and a small driver script in my scratch folder. Running /run-skill-generator would save that as a reusable project skill.
+Next is Phase 2: the wind generator, a manual wind slider in the debug panel, a placeholder "ding" through flutter_soloud, and a headless script to tune hit rates against wind speed.

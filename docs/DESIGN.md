@@ -1,0 +1,600 @@
+# Wind Chimes — Design
+
+A physically simulated wind chime for iOS and Android, built with Flutter + Flame. Its movement and
+sound respond to real-world wind and to how the phone is held, tilted and shaken.
+
+**Status:** Phases 0–1 done (simulation core, 2.5D renderer, drag/fling, debug overlay). Next: Phase 2.
+See [Roadmap](#g-implementation-roadmap).
+
+---
+
+## Key decisions
+
+These are the decisions that differ from the original brief, and why.
+
+1. **Simulate in 3D, render in 2D ("2.5D").** In a flat 2D side view with rods in a row, the clapper
+   can only reach the rod directly left or right of it: two notes, forever. Real chimes put the rods
+   in a ring around the clapper. The simulation models that ring in 3D (particles use three
+   coordinates instead of two; the collision math is identical) and the renderer draws it with a fixed,
+   slightly-low camera and painter's-order depth sorting. Wind direction becomes meaningful as a
+   result: a north wind drives the clapper into the rods on the south side.
+2. **Physics is a pure-Dart package, not Flame components.** Flame runs the loop and draws. The
+   simulation is `step(dt, inputs) → state + events` with no Flutter or Flame imports
+   (`packages/chime_sim`), so it can be tested headless and tuned with scripts. Flame's collision
+   system (`HasCollisionDetection`, hitboxes) is overlap detection only — no impulse, no contact
+   velocity, evaluated per frame rather than per substep — so it is not used at all.
+3. **A weather API returns a mean, not wind.** Open-Meteo returns a 10-minute average at 10 m height.
+   A constant force pushes the chime to a new resting angle and it goes quiet: **steady wind doesn't
+   ring chimes, fluctuations do.** A wind synthesizer sits between the API and the physics: mean (from
+   the API) + turbulence (Ornstein–Uhlenbeck) + discrete gusts (sized by the API's gust value).
+4. **Tilt rotates gravity; shake is an inertial force.** Treating the phone as a window onto a real
+   chime, tilting it keeps the chime plumb in the real world, which on screen means gravity rotates.
+   That yields "tilt right → chime swings right", and the transient swing produces collisions.
+   Shaking applies the phone's linear acceleration as a pseudo-force (−m·a) to every body — the
+   physically exact model of a chime hanging inside the phone — rather than "shake detected → add a
+   random force".
+5. **Audio is its own module, fed by an event buffer, using `flutter_soloud`.** `flame_audio` /
+   `audioplayers` is built for occasional sound effects: high Android latency, one platform player per
+   sound, weak polyphony. A chime needs 10–20 overlapping, pitch-varied, long-tailed voices at low
+   latency.
+6. **Touch is part of the MVP.** Dragging and flinging the clapper, and swiping to make a gust, is the
+   first thing anyone tries and the fastest way to test the physics.
+
+---
+
+## A. System Architecture
+
+```
+┌──────────────────────────── FLUTTER APP SHELL ────────────────────────────┐
+│ UI: ChimeScreen = GameWidget + overlays (wind chip, controls, debug)      │
+│        ▲ observes ≤5 Hz                         │ user actions             │
+│ ┌──────┴──────────── Application layer (Riverpod) ▼──────────────────┐    │
+│ │ WindController  MotionController  SettingsController  Lifecycle    │    │
+│ └─────┬───────────────┬─────────────────┬────────────────────────────┘    │
+│  WeatherProvider   MotionSource     SettingsRepo                          │
+│  + Location        (sensors_plus;   (shared_prefs)                        │
+│  (Open-Meteo/MET)   native later)                                         │
+└───────┬───────────────┬─────────────────┬─────────────────────────────────┘
+        │ WindTarget    │ MotionSample    │ SimConfig / AudioConfig
+        │ (~30 min)     │ (50 Hz)         │ (on change)
+        ▼               ▼                 ▼
+   ┌────────────── SimInputs: latest-value snapshot ──────────────┐
+   └──────────────────────────────┬────────────────────────────────┘
+                                  │ read once per fixed step
+┌───── FLAME: loop + view ────────┼──┐   ┌──── chime_sim (pure Dart pkg) ────┐
+│ WindChimeGame.update(dt)        ▼  │   │ FixedStepper 120 Hz × 4 substeps  │
+│   accumulator ─────────────────────┼──►│ WindField  mean·turbulence·gusts  │
+│   drain events ◄───────────────────┼───│ Particles  SoA Float64List        │
+│ ChimeRenderer (3D→2.5D, interp) ◄──┼───│ Constraints strings, rigid rods   │
+│ Sky · particles · touch→SimInputs  │   │ Collisions → EventRing            │
+└──────────────┬─────────────────────┘   └───────────────────────────────────┘
+               │ CollisionEvent batch, once per frame
+        ┌──────▼──────────────────────────────────┐
+        │ AudioEngine (interface) → flutter_soloud │
+        │ HitMapper · VoiceAllocator · reverb ·    │
+        │ wind ambience · HapticsSink (later)      │
+        └──────────────────────────────────────────┘
+```
+
+### Data-flow rules
+
+- **Write inputs when data arrives; read them once per physics step.** Sensor and weather callbacks
+  write their latest value into `SimInputs`; each fixed step reads whatever is there. No streams cross
+  into the simulation, and nothing calls `setState` per sensor event.
+- **Everything runs on the main isolate.** The simulation is about 15 particles and takes
+  microseconds per step; an isolate would only add latency and copying. The one exception is baking
+  procedural audio samples, which uses `Isolate.run`.
+- **The simulation has two outputs:** state (position arrays the renderer reads each frame) and events
+  (a preallocated ring buffer, drained once per frame into audio and haptics).
+- **"Intensity" is not a simulation concept.** The simulation reports physical quantities (impulse,
+  normal speed, strike position); turning those into loudness is the audio module's job.
+- **The UI observes at low rate.** The wind readout comes from the `WindController` (API data), not
+  from the simulation each frame. A live gust meter, if wanted, is a `ValueNotifier` the game updates
+  at about 5 Hz.
+- **Settings produce immutable config objects** (`SimConfig`, `AudioConfig`) that are swapped
+  atomically; geometry changes rebuild the chime, which is rare.
+
+### Module boundaries
+
+`chime_sim` is a separate package with no Flutter dependency, so the compiler enforces the first row.
+
+| Module | May know | Must not know |
+|---|---|---|
+| `chime_sim` | math | Flutter, Flame, sensors, HTTP, audio |
+| `game` (Flame) | sim, `SimInputs`, `CollisionSink` / `AudioEngine` interfaces | HTTP, sensors, widget state |
+| `audio` | `CollisionEvent`, `AudioConfig` | Flame, physics internals |
+| `weather` / `motion` | their platform APIs | Flame, sim internals |
+| UI | controllers | sim internals |
+
+### What runs when
+
+| Cadence | Work |
+|---|---|
+| Every rendered frame (60/90/120 Hz) | Add `dt` to the accumulator and run k fixed steps; drain events to audio; render state interpolated between steps; push UI readouts at ≤5 Hz |
+| Fixed step (120 Hz, 4 substeps) | Wind field, forces, constraints, collisions, events |
+| Sensor event (~50 Hz) | Filter; write a `MotionSample` into `SimInputs` |
+| Weather (every 30–60 min, or on resume if stale) | Fetch, cache, update `WindTarget` |
+| Once per second | Interpolate the forecast timeline to get the current mean-wind target |
+| User interaction | Settings → new config; drag → soft spring constraint on a body; swipe → gust |
+| App lifecycle | **Pause:** stop sensors, fade and pause audio, cancel timers (Flame's `pauseWhenBackgrounded` only stops the loop). **Resume:** reset the accumulator and filters, refresh stale weather, fade audio in |
+
+### Performance checklist
+
+- **No allocations inside the physics step.** Positions, previous positions, velocities and inverse
+  masses are structure-of-arrays `Float64List`s. The event ring is preallocated. `Paint` and `Path`
+  objects are reused in `render`.
+- **Protect the loop from hitches:** clamp frame `dt` to 0.1 s and run at most 12 fixed steps per frame.
+- **Rendering:** cache the static background; avoid `saveLayer` and blur filters per frame (use
+  pre-rendered glow sprites). iPhone 120 Hz requires `CADisableMinimumFrameDurationOnPhone` in
+  Info.plist (already set).
+- **Components:** one `ChimeRenderer` draws all bodies in depth order, instead of ~15 components
+  re-sorting priorities every frame. It is rebuilt only when the chime preset changes.
+- **Screen sizes:** the world is defined in meters; the camera scales the chime's bounding box to about
+  65–75% of the safe-area height (or width, whichever is tighter). The sky fills the whole screen.
+- **Battery:** sensors at `SensorInterval.gameInterval`, never `fastest`. Optional 60 fps cap as a
+  battery saver on 120 Hz screens.
+
+---
+
+## B. Physics Model
+
+### B1. Engine choice
+
+| Option | Verdict |
+|---|---|
+| Flame collision detection | Not physics: per-frame overlap checks, no impulses or contact velocity. ❌ |
+| Forge2D (`flame_forge2d`) | 2D only, so it can't model the rod ring. Joint chains get springy, resting contacts jitter, and wind drag must be hand-written anyway. Fallback only if the design stays 2D. |
+| 3D physics ports in Dart | Niche and too heavy for ~15 bodies. ❌ |
+| **Custom substepped XPBD** | ✅ ~500–700 lines. Stable, full control over damping and contacts, exact contact velocity for audio. |
+
+Flame is appropriate as the loop, renderer, camera, particle system and overlay host — not as the
+physics engine. A `CustomPainter` + `Ticker` would suffice for the MVP; Flame pays off in polish.
+
+### B2. Bodies and forces
+
+Units are SI (m, kg, s). Axes: x right, y up, z toward the viewer.
+
+| Body | Model |
+|---|---|
+| Hook | Fixed point at the origin |
+| Mount | 1 particle hanging from the hook on a rope. Translates but does not rotate (MVP). |
+| Rods (5–8) | 2 particles joined by a rigid distance constraint, on a ring of radius R, each hung by a string. The particles sit at ±L/(2√3) from the rod's center (m/2 each) so the rod has the rotational inertia of a uniform tube (mL²/12); the rod's ends are linear extrapolations of the two particles. |
+| Clapper | 1 particle (sphere, radius r_c) on a string from the mount's center |
+| Sail | 1 particle below the clapper: large drag area, low mass. **It catches the wind and drives the clapper.** |
+
+The ring is rotated so the camera looks between two rods; otherwise the front rod hides the clapper.
+
+**Collisions need relative motion.** Four sources create it:
+
+1. The sail and clapper respond ~3× more strongly to wind than the heavy rods (drag relative to mass).
+2. Rods of different lengths have different natural frequencies (ω = √(g/L_eff)) and drift out of phase.
+3. The wind fluctuates.
+4. A gust reaches the upwind side of the chime slightly before the downwind side.
+
+**Force on each particle:**
+
+```
+F_i = m_i·g_s  +  k_i·|u_i − v_i|·(u_i − v_i)  −  m_i·a_dev  −  c·m_i·v_i
+      gravity     drag on relative velocity        phone accel.   small linear damping
+k_i = ½·ρ·C_d·A_i   (ρ = 1.2 kg/m³)
+```
+
+- Drag on *relative* velocity gives aerodynamic damping for free.
+- The small linear damping term lets the chime settle in still air, because quadratic drag vanishes
+  at low speed.
+
+**Starting values (default preset):**
+
+| Part | Value |
+|---|---|
+| Top rope | 0.12 m |
+| Mount | Wood disc r = 0.07 m, 0.12 kg |
+| Rods | Aluminium tube Ø18 mm, 1 mm wall (~0.144 kg/m), 5 cm strings, ring R = 5.2 cm. Lengths from pitch: a free tube's frequency goes as 1/L², so **L_k = L_ref·√(f_ref / f_k)**. Longer rods look and sound lower. |
+| Clapper | Ø50 mm, 0.03 kg, centered at ~60% of the shortest rod's length. It must be wider than the opening between neighbouring tubes (43 mm here), or it escapes the ring. |
+| Sail | 9 × 13 cm, 12 g, C_d 1.2, hanging clear below the longest rod |
+| Restitution e | 0.5 (wood clapper) to 0.75 (metal) |
+
+At 3 m/s this gives ~2 m/s² of lateral push on the sail + clapper against ~0.6 m/s² on the rods: a
+few centimetres of relative displacement against a gap of ~1.8 cm. Real units and real wind speeds
+land in a believable regime, so tuning happens in exposure and turbulence, not arbitrary constants.
+
+### B3. Integration and collisions
+
+Substepped XPBD (Macklin et al., *Small Steps in Physics Simulation*, 2019):
+
+```
+Δt = 1/120 s, n = 4 substeps, h = Δt/n
+per substep:
+  for each particle: v += h·F/m;  x_prev = x;  x += h·v
+  solve each constraint once   (strings only when taut; rods rigid)
+  detect + push apart contacts (record the normal velocity before the push)
+  v = (x − x_prev)/h
+  velocity pass: v_n ← −e·v_n_pre (restitution), tangential friction
+  emit events for new contacts
+```
+
+**Distance constraint** between two points, where each point is a weighted sum of particles plus an
+offset (this covers extrapolated rod ends and the mount's attachment points):
+
+```
+C = |p_a − p_b| − ℓ,   n = (p_a − p_b)/|p_a − p_b|
+w_a = Σ α_i²·w_i  over the particles defining p_a   (w = inverse mass)
+λ = −C / (w_a + w_b + α_c/h²)                          (α_c = compliance)
+Δx_i = ±α_i·w_i·λ·n
+```
+
+Strings are one-sided: they are only enforced when C > 0, so a violent shake can let a rod jump.
+
+**Clapper (sphere) vs. rod (capsule from p₀ to p₁):**
+
+```
+t = clamp(((c−p₀)·(p₁−p₀)) / |p₁−p₀|², 0, 1),   q = p₀ + t(p₁−p₀)
+δ = r_c + r_r − |c−q|,   n = (c−q)/|c−q|         contact if δ > 0
+w_q = Σ α_i(t)²·w_i        rod's effective inverse mass at the hit point
+v_n = (v_c − v_q)·n         negative = approaching
+J   = (1+e)·|v_n| / (w_c + w_q)     impulse, used by audio
+```
+
+Because w_q depends on t, a hit near the bottom of a rod spins it more than a hit near the top.
+
+**Events** are emitted only when all of these hold: the contact just began (with ~1 mm of separation
+hysteresis before it can begin again), |v_n| is above ~2 cm/s, and at least 30 ms have passed since
+that rod's last event. The clapper leaning on a rod in steady wind stays silent.
+
+```dart
+class CollisionEvent {       // preallocated, reused in the ring buffer
+  int rodId;
+  double impulse;            // J, N·s
+  double normalSpeed;        // |v_n|, m/s
+  double strikePos;          // t along the rod: 0 = top, 1 = bottom
+  double glancing;           // 0 = square hit, 1 = grazing
+  double simTime;
+}
+```
+
+**Safety limits.** At a max speed of 6 m/s and 480 Hz substeps, the clapper moves 12.5 mm per
+substep; clapper + rod radii are ~34 mm, so it cannot tunnel and no continuous collision detection is
+needed. Speeds are clamped at 6 m/s. A non-finite state resets the chime to its rest pose. The renderer
+draws `lerp(previousStep, currentStep, accumulator/Δt)`.
+
+**2.5D projection.** Orthographic, camera pitched ~10° upward (you look up at a hanging chime), weak
+perspective scale `D/(D − depth)`, painter's order by depth, back rods slightly darkened.
+
+### B4. Wind: from API to force
+
+**APIs**
+
+| API | Key | Free limits | Commercial use | Notes |
+|---|---|---|---|---|
+| **Open-Meteo** | None | ~10k calls/day | ❌ free tier is non-commercial | Best developer experience: current, 15-minute and hourly wind and gusts, `wind_speed_unit=ms`, `is_day`, free geocoding |
+| **MET Norway** Locationforecast | None (identifying User-Agent required) | Fair use; must cache and honour `Expires` | ✅ free with attribution | Gusts only in `/complete` |
+| OpenWeatherMap | Yes | 60/min, 1M/month | ✅ | A key shipped in the app can be extracted; needs a proxy |
+| Apple WeatherKit (REST) | JWT | 500k/month with developer membership | ✅ | Needs a server to sign tokens |
+
+Use Open-Meteo while building; switch to MET Norway to ship commercially without paying. Both sit
+behind a `WeatherProvider` interface. At scale, a small caching proxy (e.g. a Cloudflare Worker) can
+round coordinates, cache for 15 minutes, hide keys and swap providers without an app update.
+
+**Fetching.** Fetch a short forecast timeline rather than a single value, and interpolate along it:
+fewer calls, smooth transitions, and hours of offline data.
+
+```
+/v1/forecast?latitude=48.14&longitude=11.58
+  &current=wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day
+  &minutely_15=wind_speed_10m,wind_direction_10m,wind_gusts_10m
+  &forecast_minutely_15=16&wind_speed_unit=ms&timezone=auto
+```
+
+- Fetch on launch, and on resume if the data is more than 15 minutes old.
+- Refresh every 30–60 minutes in the foreground, with ±10% jitter. Never fetch in the background.
+- Round coordinates to 2 decimals (~1 km) for privacy and cache hits.
+
+**Failures and offline**
+
+- Source states: **live** (<30 min old) → **cached** (≤6 h, or while the timeline covers now) →
+  **Ambient** (a built-in breeze, clearly labeled) → **Manual**.
+- 8 s timeout; exponential backoff 30 s, 1, 2, 4… min, capped at 15 min, with jitter; retry on resume.
+- Validate: speed 0–75 m/s, direction 0–360, nulls handled.
+- **The simulation never waits for the network.**
+- No `connectivity_plus`: "connected" doesn't mean the API is reachable, so just try and fall back.
+
+**Smoothing**
+
+- Interpolate linearly along the timeline.
+- Inside the simulation, ease toward new targets with a time constant of ~30 s.
+- **Interpolate direction as a vector (u, v), not an angle**, so 350° → 10° passes through 0°.
+
+**Wind speed → force**
+
+1. **Exposure:** U_p = E·U₁₀ with E = 0.4 (sheltered), 0.6 (garden), 0.85 (open). A porch is not a
+   10 m mast. Exposed to users as a "Placement" setting.
+2. **Soft cap:** U_e = U_c·tanh(U_p/U_c), U_c ≈ 8 m/s. Storms stay wild without breaking.
+3. **User sensitivity** multiplier.
+4. **Turbulence:** u(t) = U(t)·(1 + I·n(t)) + gust(t)
+   - n: Ornstein–Uhlenbeck process, unit variance, T ≈ 2 s. Exact update at any step size:
+     `n ← n·e^(−h/T) + √(1−e^(−2h/T))·N(0,1)`
+   - Turbulence intensity I ≈ 0.15 (open) to 0.35 (sheltered), tied to exposure.
+   - Gusts: Poisson arrivals, ~1 per 10–20 s, more often when the gust factor G = gust/mean is high.
+     Amplitude ≈ U(0.3, 1)·(G−1)·U, shaped as a 1−cos pulse over 2–5 s.
+   - Direction wander: θ(t) = θ̄ + σ·n₂(t), σ ≈ 10–20°.
+5. **Gust delay across the chime:** particle i reads the noise at t − (x_i·ê)/U, so upwind rods feel a
+   gust first (ring buffer of ~100 ms of noise history).
+6. Apply the drag formula from B2.
+7. Optional **"Calm days: silent / gentle"** setting: at 0.2 m/s a real chime is silent.
+
+**Direction.** Meteorological direction is where the wind comes *from*, clockwise from north. Scene
+frame: x = east, z = toward the viewer, camera facing north by default:
+`u = U·(−sin θ, 0, cos θ)`. Later, subtract the compass heading ψ from θ so the chime blows the way the
+real wind blows relative to where the user stands. In 3D, a wind blowing straight into the screen
+still hits the far rods instead of doing nothing.
+
+---
+
+## C. Sensor Model
+
+| Interaction | Signal | Source | Why |
+|---|---|---|---|
+| **Tilt** | Gravity in the device frame | Accelerometer, low-pass filtered (MVP); later OS-fused gravity (Android `TYPE_GRAVITY`, iOS `CMDeviceMotion.gravity`) | A gyroscope measures rotation rate and drifts; raw acceleration mixes tilt with motion, and OS fusion uses the gyro to separate them |
+| **Shake / jolt** | Linear acceleration (gravity removed) | `sensors_plus` `userAccelerometerEventStream` (already OS-fused) | Exactly what a hook would feel |
+| Twist | Rotation rate ω_z | Gyroscope | Optional kick; mostly useful inside OS fusion |
+| Heading (later) | Compass | OS heading | Wind direction relative to where the user faces |
+
+**Axes.** `sensors_plus` reports the Android convention on both platforms: x right, y toward the top
+of the device, z out of the screen, in m/s². At rest the accelerometer reads the *opposite* of
+gravity, so `g_dev = −lowpass(accel)`.
+
+```
+accel ──► 1€ filter ──► g_dev ──► γ = atan2(g_x, −g_y) ──► clamp ±40°, fade when flat ──► gravity direction
+userAccel ─► dead zone ─► low-pass (τ≈25 ms) ─► soft clamp ─► a_dev (3D) ─► force −m·a_dev on every body
+         └─► energy + reversal counter ─► shakeIntensity 0..1 (haptics, ambience swell)
+```
+
+**Tilt → gravity**
+
+- `g_s = 9.81·(sin γ', −cos γ', 0)` with `γ' = clamp(γ, ±40°)·smoothstep(0.25, 0.5, |g_xy|/9.81)`.
+- Gravity's magnitude stays fixed; only its direction comes from the sensor. When the phone lies flat,
+  the in-screen component of gravity is meaningless, so the fade makes the chime hang straight while
+  still responding to wind.
+- Forward/backward tilt is ignored by the physics; it may drive camera parallax later.
+
+**Smoothing**
+
+- Time constants, not per-sample blend factors: `α = 1 − e^(−Δt/τ)` with Δt from event timestamps.
+- Tilt uses the **1€ filter** (heavy smoothing when still, low lag when moving).
+- Linear acceleration has a dead zone of 0.1–0.2 m/s² (table noise is ~0.03).
+- If no event arrives for 200 ms, `a_dev` decays to zero.
+- On resume, filters restart from the first new sample, not from zero.
+
+**Shake detection** (for app-level reactions only; the continuous force already handles the physics)
+
+- Energy `E ← average(|a|², τ=0.3 s)`.
+- A shake needs ≥3 sign reversals on the dominant horizontal axis with |a| > 0.5 g within 800 ms, and
+  √E > 0.4 g. It ends when √E < 0.2 g for 300 ms.
+- Reversal counting rejects walking (vertical spikes of ~0.3 g without back-and-forth motion).
+
+**Limits.** Soft-clamp `|a_dev| ≤ 1.5 g` via `a·a_max·tanh(|a|/a_max)/|a|`, after the sensitivity
+multiplier (0.3–2×).
+
+**Orientation.** Portrait is locked on phones. Sensor axes are device-fixed; landscape support would
+require remapping by display rotation, which Flutter can't distinguish (left vs right) without native
+code.
+
+**Rate and permissions.** `SensorInterval.gameInterval` (20 ms). No motion permission is needed on
+either platform at this rate.
+
+---
+
+## D. Audio Model
+
+```
+CollisionEvent ─► HitMapper (pure, testable) ─► VoiceAllocator ─► SoLoud voice
+                  loudness, layer, brightness,     polyphony,       volume, pan,
+                  detune, pan, variant             stealing, rules  playback speed
+master bus: reverb (freeverb) ─► limiter ─► out
+ambience: looped wind bed; volume and filter follow the live wind speed
+```
+
+**Collision → loudness**
+
+```
+s       = clamp( ln(J/J_min) / ln(J_max/J_min), 0, 1 )   // impulse spans ~100×; hearing is logarithmic
+gain_dB = −30 + 30·s  ± 1.5 dB random
+layer   = soft / medium / hard by s
+bright  = low-pass cutoff 2 kHz → 12 kHz with s (or carried by the layer)
+variant = strikePos near the end vs. the middle → "edge" / "center" sample
+pan     = rod's screen x → ±0.35
+detune  = ±6 cents random  (speed = 2^(cents/1200))
+```
+
+Strike position changes a tube's timbre, because modes with a node at the strike point aren't
+excited; selecting the sample variant by `strikePos` captures that.
+
+**Sample strategy**
+
+| Option | Use? |
+|---|---|
+| One sample per rod | ❌ Too repetitive |
+| **Multiple samples per rod**: 2–3 loudness layers × 2–3 alternates, never repeating the last | ✅ Core approach |
+| Pitch shifting | ✅ Micro-detune only; never stretch one sample more than 2–3 semitones |
+| Volume variation | ✅ From the impulse, plus small jitter |
+| Procedural (modal) synthesis | ✅ Later, baked once at startup rather than in real time |
+| Audio package | ✅ **`flutter_soloud`** (SoLoud via FFI) |
+| Native audio APIs | ❌ Only if SoLoud fails a latency test on target devices. Real-time DSP, if ever needed, is C++ via FFI, not Swift + Kotlin |
+
+**Preventing repetition:** loudness layers, alternates, strike-position variants, micro-detune, gain
+jitter, pan by position, overlapping voices on the same rod (natural beating), a shared reverb and a
+wind bed. The physics' irregular timing does half the work.
+
+**Voice management**
+
+- Raise SoLoud's active-voice limit from 16 to ~24–32.
+- At most 3 voices per rod; a new strike starts a voice and fades the oldest over 30–80 ms (no clicks).
+- Density limiter: after >10 hits in a second, raise the hit threshold and lower the gain slightly.
+- Contact damping: if the clapper stays pressed against a ringing rod for >100 ms, fade that rod faster.
+
+**Procedural samples (later).** A tube's sound is a sum of decaying partials; free-tube mode ratios are
+~1 : 2.76 : 5.40 : 8.93, with higher modes decaying faster. Split each mode into two partials 0.1–0.3%
+apart for the slow shimmer of real (imperfectly round) tubes. Add a 2–5 ms filtered-noise strike
+transient. Generate in `Isolate.run` at startup and load from memory.
+
+**Practical details**
+
+- Memory: SoLoud stores decoded samples as float32, ~0.9 MB per 5 s mono sample; 5 rods × 2 layers ×
+  2 alternates ≈ 18 MB. Ship `.ogg`.
+- Latency: tune SoLoud's buffer size; target <50 ms end to end; test a low-end Android device early.
+- Audio session (`audio_session`): iOS **playback** category (a sound-first app muted by the ringer
+  switch looks broken), with a "mix with other audio" option; handle interruptions.
+- Sample quality matters more than any engine trick.
+
+---
+
+## E. Project Structure
+
+```
+wind_chimes/
+├── packages/chime_sim/            # PURE DART — no Flutter/Flame
+│   ├── lib/src/
+│   │   ├── config/     chime_config, presets, pitch → rod length
+│   │   ├── core/       particles (SoA), links (constraints), simulation, fixed stepper
+│   │   ├── collision/  sphere–capsule, contact cache
+│   │   ├── wind/       wind_field, ou_noise, gust_scheduler        (Phase 2)
+│   │   ├── inputs/     sim_inputs
+│   │   └── events/     collision_event, event_ring
+│   ├── test/           rest stability, bounded energy, no NaN, no chatter on resting contact
+│   └── tool/harness.dart   # headless: hits/sec vs wind speed → CSV (Phase 2)
+├── lib/
+│   ├── main.dart
+│   ├── app/            app widget, theme; later providers + lifecycle orchestrator
+│   ├── game/           WindChimeGame (loop, event drain), debug stats
+│   │   ├── render/     projection, sky, chime renderer
+│   │   └── input/      drag → touch constraint
+│   ├── weather/ location/ motion/ audio/ settings/            (Phases 2–6)
+│   └── ui/             chime_screen, overlays/ (debug panel; later wind chip, controls sheet)
+├── assets/audio/<preset>/<rod>_<layer>_<rr>.ogg, assets/audio/ambience/wind_loop.ogg
+└── test/
+```
+
+---
+
+## F. Packages
+
+| Package | Phase | Why |
+|---|---|---|
+| `flame` | 0 | Loop, rendering, overlays, particles |
+| `flutter_soloud` | 2 | Low-latency polyphonic audio, per-voice pitch/volume/pan, reverb and filters |
+| `audio_session` | 3 | iOS category and mixing, interruptions, route changes; Android audio focus |
+| `sensors_plus` | 4 | Accelerometer, linear acceleration, gyroscope, magnetometer |
+| `geolocator` | 5 | Coarse location only |
+| `http` | 5 | Weather calls |
+| `flutter_riverpod` | 4–5 | DI and app state once there are controllers |
+| `shared_preferences` | 5–6 | Settings and cached forecast |
+| `wakelock_plus` | optional | Bedside "keep screen on" mode |
+| `flame_test`, `mocktail` | as needed | Tests |
+
+Not used: `flame_forge2d`, `flame_audio` / `audioplayers`, `just_audio`, `connectivity_plus`, Flame
+collision detection.
+
+---
+
+## G. Implementation Roadmap
+
+Audio moves earlier than in the original brief because physics is tuned by ear; touch moves earlier
+because it is how the physics gets tested.
+
+| Phase | Build | Done when |
+|---|---|---|
+| **0. Skeleton** | `chime_sim` package, `GameWidget`, portrait lock, debug overlay | App runs and shows step count and FPS |
+| **1. Simulation core** | Particles, strings, rigid rods, ring layout, 2.5D renderer with interpolation, sphere–capsule contacts, contact cache, event ring, drag/fling | Flinging the clapper hits rods around the ring; events show sensible impulses; no NaNs over 10 simulated minutes; headless tests pass |
+| **2. Wind + feel** | Wind field (mean + turbulence + gusts + delay), manual wind in the debug panel, placeholder "ding" through SoLoud, headless harness | Hit-rate curve in the target bands and it looks right |
+| **3. Audio** | Sample bank, `HitMapper`, `VoiceAllocator`, variation, reverb + limiter, wind bed, `audio_session` | 5 minutes at a gentle breeze doesn't sound looped; no clicks; storms stay musical |
+| **4. Motion** | Sensor source, processor (1€, tilt → gravity, inertial force, shake), sensitivity | Tilt swings the chime; shaking makes a flurry; stable flat on a table; walking only jiggles it |
+| **5. Real weather** | Provider interface, Open-Meteo, coarse location / manual city, cache + staleness states, backoff, timeline, exposure | Airplane-mode launch still plays; live updates cause no audible jumps |
+| **6. UI shell** | Controls sheet, settings persistence, first-run flow, auto-hiding overlays | Sound within ~1 s of opening; no permission prompt blocks it |
+| **7. Polish** | Tube shading, sail cloth look, time-of-day sky, wind-carried particles, haptics during touch/shake, mount rotation, rod–rod clinks, low-end Android profiling, battery test | 60 fps on a mid-range Android; ≤~5%/h battery |
+
+Phase 2 hit-rate targets (starting point): 1 m/s ≈ 0.1–0.3 hits/s, 3 m/s ≈ 0.5–1.5, 6 m/s ≈ 2–4,
+10 m/s ≤ 8.
+
+### UI / UX
+
+- **Main screen:** full-bleed sky, chime slightly above center, no app bar.
+- **Top left:** a quiet chip such as `11 km/h ↗ NW ●`; the dot shows the source (live, cached,
+  ambient, manual). Tapping it shows gusts, location, "updated 5 min ago" and the Beaufort description.
+- **Bottom:** a pill that pulls up into one sheet: mode (Live / Manual), manual speed slider with
+  Beaufort detents and a direction dial, volume and ambience, motion sensitivity, placement
+  (Sheltered / Garden / Open), and a chime preset carousel.
+- **Settings:** a section at the bottom of the same sheet — units, location, haptics, attributions
+  (MET Norway requires one).
+- **Overlays** fade after ~4 s; tapping empty space brings them back. Touching the chime plays it.
+- **First run:** start immediately in Ambient mode; the wind chip offers "Use live wind?", and only that
+  asks for location.
+
+---
+
+## H. MVP Definition
+
+The MVP proves one thing: *a physically simulated chime, driven by real wind and your hands, sounds
+good enough to leave running.*
+
+**In:** one preset (5 aluminium rods, pentatonic, clapper, sail, mount on rope), 3D simulation with
+2.5D rendering, wind synthesizer + Open-Meteo timeline + coarse location or manual city + cached and
+Ambient fallbacks + Manual mode, tilt and shake via `sensors_plus`, drag and fling, SoLoud with
+2 layers × 2 alternates per rod plus detune/gain/pan/reverb/wind bed, one screen (wind chip, controls
+sheet, hidden debug panel), portrait, foreground only.
+
+**Deliberately out:** presets, chime builder and materials; procedural audio; compass and parallax;
+mount rotation, rod–rod collisions, cloth simulation; background audio and sleep timer; haptics,
+particles, lighting; tablet and landscape layouts; native plugins, proxy server, accounts, analytics;
+Forge2D; isolates.
+
+---
+
+## I. Future Enhancements
+
+- **"True window" mode:** compass-accurate wind direction plus forward/backward tilt as camera parallax.
+- **Real-time modal synthesis** (C++ via FFI): timbre that varies continuously with strike position and
+  force, contact damping, sympathetic resonance between rods.
+- **Chime builder:** rod count, scale (pentatonic, Aeolian, Corinthian bells, custom), material; rod
+  lengths derived from pitch.
+- **Weather-reactive scene:** rain (drops ticking the rods), snow, night sky from `is_day`,
+  thunderstorm gust fronts.
+- **"Blow on the mic"** to make a gust.
+- **Listen elsewhere:** pick a place on a world map and hear its wind now; replay historical storms.
+- **Sleep mode:** background playback, timer, lock-screen controls.
+- Multiple chimes in one spatial scene; head-tracked spatial audio.
+- Record/replay of all simulation inputs, for bug reports and shareable audio clips.
+
+---
+
+## Native code
+
+Start with none. Add only when a package proves insufficient:
+
+- A fused-motion plugin (`CMDeviceMotion` / `TYPE_GRAVITY` + linear acceleration in one timestamped
+  stream), ~150 lines per platform, if filtered `sensors_plus` data lags or jitters.
+- Compass heading.
+- Display rotation, if landscape is ever supported.
+- Background audio plumbing (iOS background audio mode, Android media foreground service).
+- Core Haptics, if `HapticFeedback`'s presets feel too coarse.
+- Real-time DSP: C++ via FFI, not platform code.
+
+---
+
+## Hardest parts and how to approach them
+
+1. **Tuning the feel (biggest risk).** Too many hits is noise; too few and the app feels dead. Rod
+   lengths, masses, the gap, exposure, turbulence and restitution all interact. Approach: headless
+   harness with target hit-rate bands, debug sliders bound live to `SimConfig`, recorded inputs so
+   tuning runs against the same gust every time, and sound on from Phase 2.
+2. **Audio that doesn't sound looped.** Engine tricks can't save weak samples. Get good recordings or
+   baked samples by Phase 3; judge them in 10-minute listening sessions, not single hits.
+3. **Contacts.** Resting contacts, double hits and jitter produce machine-gun sound. Contact cache with
+   hysteresis, minimum approach speed, per-rod retrigger limit, restitution in the velocity pass.
+   Tested: a clapper held against a rod produces no further events after it settles.
+4. **Separating tilt from movement.** Raw acceleration can't distinguish tilting from accelerating;
+   filtering trades lag for jitter. Start with `sensors_plus` + 1€; fall back to a small native
+   fused-motion plugin. Handle the flat phone explicitly.
+5. **Audio lifecycle and latency.** Calls, Siri, headphone disconnects, clicks on resume, low-end
+   Android latency. One lifecycle orchestrator using `audio_session`, tested on a device matrix early.
+6. **Making sparse weather data feel alive.** Drive the chime physics, the ambience and the particles
+   from the same wind field, so a gust is heard and seen just before the chime answers.

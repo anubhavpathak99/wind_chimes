@@ -1,0 +1,11 @@
+name: chime_sim
+description: Wind chime physics simulation in pure Dart. No Flutter or Flame dependencies.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.13.3
+
+dev_dependencies:
+  lints: ^6.1.0
+  test: ^1.31.1
