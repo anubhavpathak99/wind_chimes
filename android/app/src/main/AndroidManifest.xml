@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Weather. Debug builds get INTERNET from the debug manifest; release builds need it here. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- City-level location is all wind needs: never ask for precise location. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <application
         android:label="wind_chimes"
         android:name="${applicationName}"

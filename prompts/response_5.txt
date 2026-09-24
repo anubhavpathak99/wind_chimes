@@ -1,0 +1,22 @@
+Phase 4 is done: 36 physics tests and 70 app tests pass, the analyzer is clean, and I checked tilt and shaking on the Android emulator by injecting sensor readings. The feel on a real phone is the part left for you to judge.
+
+How it works
+
+Tilt: tilting the phone rotates gravity, so the chime keeps hanging straight down in the real world. The shaking part of the accelerometer signal is subtracted out, so shaking doesn't read as tilting, and the result is smoothed without adding lag. Tilt is limited to ±40° and fades out when the phone lies flat or is upside down.
+Push: moving the phone pushes the chime, like a real chime hanging inside the phone. Sensor noise below a small threshold is ignored, a sensitivity setting scales it, and only violent jolts are compressed.
+Shake detection: it needs repeated back-and-forth swings, so walking or a single bump doesn't count. It's shown in the debug overlay for now and will drive haptics in Phase 7.
+Phones without a gyroscope: if the phone's system doesn't provide gravity-free acceleration, the app works it out from the accelerometer instead. Tilt then responds in about half a second rather than immediately. Before this fix, such a phone would have lost tilt too.
+Sensors switch off when the app goes to the background. The simulation receives motion before each physics step, so there's no extra frame of delay.
+Debug overlay: a new Motion card shows live tilt, push and shake level, with a sensitivity slider and a tilt switch.
+Checked
+
+Tests: synthetic sensor data covers the phone upright, rolled sideways, leaned back 50° (as people usually hold it), flat on a table, upside down, noisy, shaken, walking and bumped. In the simulation, a 20° tilt makes the chime hang at 20 ± 2°, a 3-second shake sets off a flurry of hits, and walking only jiggles it.
+Emulator: the injected 20° tilt read "tilt 20°" and the chime leaned 20° right. The injected shake read "shaking 51%" and produced 4–5 hard hits per second. Both returned to 0 afterwards.
+Things to know
+
+Tilt might wobble while shaking. In the emulator, tilt briefly read 25° during the shake. My fake readings jumped instantly with no matching gyroscope rotation, which fools the emulator's sensor fusion, so a real phone should behave better. If you see tilt wobble while shaking your phone, the next step is the native motion plugin the design already allows for.
+I haven't committed anything. Phase 3 is still staged and Phase 4 is uncommitted.
+The Dart/Flutter plugin you added has a helper tool server (dart-mcp-server) that failed to connect this session. I didn't need it; it retries on its own.
+On your phone, try tilting it slowly, shaking it, walking with it, laying it flat on a table (the chime should settle and stay put), and moving the sensitivity slider.
+
+Next is Phase 5: live weather from Open-Meteo, location, caching and offline handling. docs/DESIGN.md now has Phase 4 notes.

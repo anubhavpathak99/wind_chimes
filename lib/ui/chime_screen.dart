@@ -11,20 +11,24 @@ import '../game/wind_chime_game.dart';
 import '../motion/motion_controller.dart';
 import '../motion/motion_settings.dart';
 import '../motion/motion_source.dart';
-import '../wind/manual_wind.dart';
+import '../wind/wind_controller.dart';
+import '../wind/wind_services.dart';
 import 'overlays/debug_panel.dart';
 import 'overlays/motion_panel.dart';
 import 'overlays/wind_panel.dart';
 
 /// The app's only screen: the chime, full-bleed, with overlays on top.
 class ChimeScreen extends StatefulWidget {
-  const ChimeScreen({super.key, this.audioEnabled = true, this.motionSource});
+  const ChimeScreen({super.key, this.audioEnabled = true, this.motionSource, this.windServices});
 
   /// Off in widget tests, where there is no audio device.
   final bool audioEnabled;
 
   /// Where phone motion comes from; the device's sensors by default.
   final MotionSource? motionSource;
+
+  /// Weather, location and storage for live wind; the real ones by default.
+  final WindServices? windServices;
 
   @override
   State<ChimeScreen> createState() => _ChimeScreenState();
@@ -40,6 +44,13 @@ class _ChimeScreenState extends State<ChimeScreen> {
     source: widget.motionSource ?? const SensorsPlusMotionSource(),
     inputs: _simulation.inputs,
   );
+  late final _windServices = widget.windServices ?? WindServices.standard();
+  late final _wind = WindController(
+    inputs: _simulation.inputs,
+    weather: _windServices.weather,
+    location: _windServices.location,
+    store: _windServices.store,
+  );
   late final _isPressing = _simulation.isPressingRod;
   late final _game = WindChimeGame(
     simulation: _simulation,
@@ -49,7 +60,6 @@ class _ChimeScreenState extends State<ChimeScreen> {
     stats: _stats,
   );
   late final AppLifecycleListener _lifecycle;
-  var _wind = const ManualWind();
   var _motionSettings = const MotionSettings();
   var _windPanelOpen = false;
   var _motionPanelOpen = false;
@@ -57,18 +67,21 @@ class _ChimeScreenState extends State<ChimeScreen> {
   @override
   void initState() {
     super.initState();
-    // Off screen: fade the sound out and switch the sensors off; back on screen, the reverse.
+    // Off screen: fade the sound out, switch the sensors off and stop fetching weather; back on
+    // screen, the reverse.
     _lifecycle = AppLifecycleListener(
       onHide: () {
         _audio.suspend();
         _motion.stop();
+        _wind.pause();
       },
       onShow: () {
         _audio.resume();
         _motion.start();
+        _wind.resume();
       },
     );
-    _wind.applyTo(_simulation.inputs);
+    _wind.start();
     _motionSettings.applyTo(_motion.processor);
     _motion.start();
     if (!widget.audioEnabled) {
@@ -85,6 +98,8 @@ class _ChimeScreenState extends State<ChimeScreen> {
   void dispose() {
     _lifecycle.dispose();
     _motion.dispose();
+    _wind.dispose();
+    if (widget.windServices == null) _windServices.dispose();
     _audio.dispose();
     _stats.dispose();
     super.dispose();
@@ -96,11 +111,6 @@ class _ChimeScreenState extends State<ChimeScreen> {
   void _setMotion(MotionSettings settings) {
     setState(() => _motionSettings = settings);
     settings.applyTo(_motion.processor);
-  }
-
-  void _setWind(ManualWind wind) {
-    setState(() => _wind = wind);
-    wind.applyTo(_simulation.inputs);
   }
 
   @override
@@ -151,7 +161,7 @@ class _ChimeScreenState extends State<ChimeScreen> {
             const SizedBox(height: 8),
             WindPanel(
               wind: _wind,
-              onChanged: _setWind,
+              places: _windServices.places,
               expanded: _windPanelOpen,
               onToggle: () => setState(() => _windPanelOpen = !_windPanelOpen),
             ),

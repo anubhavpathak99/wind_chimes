@@ -3,10 +3,10 @@
 A physically simulated wind chime for iOS and Android, built with Flutter + Flame. Its movement and
 sound respond to real-world wind and to how the phone is held, tilted and shaken.
 
-**Status:** Phases 0–4 done (simulation core, 2.5D renderer, drag/fling, wind model, tuning harness,
-camera framing, audio engine, motion sensors). Next: Phase 5 (real weather). See
-[Phase 2 tuning notes](#phase-2-tuning-notes), [Phase 3 audio notes](#phase-3-audio-notes) and
-[Phase 4 motion notes](#phase-4-motion-notes).
+**Status:** Phases 0–5 done (simulation core, 2.5D renderer, drag/fling, wind model, tuning harness,
+camera framing, audio engine, motion sensors, real weather). Next: Phase 6 (UI shell). See
+[Phase 2 tuning notes](#phase-2-tuning-notes), [Phase 3 audio notes](#phase-3-audio-notes),
+[Phase 4 motion notes](#phase-4-motion-notes) and [Phase 5 weather notes](#phase-5-weather-notes).
 
 ---
 
@@ -495,7 +495,7 @@ wind_chimes/
 │   ├── game/           WindChimeGame (loop, event drain), debug stats
 │   │   ├── render/     projection, sky, chime renderer
 │   │   └── input/      drag → touch constraint
-│   ├── weather/ location/ motion/ audio/ settings/            (Phases 2–6)
+│   ├── weather/ location/ storage/ wind/ motion/ audio/ settings/  (Phases 2–6)
 │   └── ui/             chime_screen, overlays/ (debug panel; later wind chip, controls sheet)
 ├── assets/audio/<preset>/<rod>_<layer>_<rr>.ogg, assets/audio/ambience/wind_loop.ogg
 └── test/
@@ -513,7 +513,7 @@ wind_chimes/
 | `sensors_plus` | 4 | Accelerometer, linear acceleration, gyroscope, magnetometer |
 | `geolocator` | 5 | Coarse location only |
 | `http` | 5 | Weather calls |
-| `flutter_riverpod` | 4–5 | DI and app state once there are controllers |
+| `flutter_riverpod` | 6, if needed | DI and app state. Not used so far: three controllers owned by the screen, with constructor injection, have been enough |
 | `shared_preferences` | 5–6 | Settings and cached forecast |
 | `wakelock_plus` | optional | Bedside "keep screen on" mode |
 | `flame_test`, `mocktail` | as needed | Tests |
@@ -666,6 +666,61 @@ acceleration into `SimInputs` once per frame, before the physics steps.
   "push 7.2 m/s², shaking 51%" with 4–5 hits/s. During that synthetic shake tilt briefly read 25°:
   instant ±9 m/s² steps with no matching gyroscope rotation fool the emulator's sensor fusion. If
   tilt wobbles while shaking a real phone, the fix is the native fused-motion plugin.
+
+### Phase 5 weather notes
+
+`lib/weather/`: `WeatherProvider` (interface), `OpenMeteoProvider`, `WindTimeline`, `WeatherCache`,
+`Backoff`, `AmbientWind`. `lib/location/`: `LocationChoice` (the phone's location or a searched
+`Place`), `GeolocatorLocationService`, `OpenMeteoPlaceSearch`. `lib/storage/`: `KeyValueStore`
+(shared preferences; in memory for tests). `lib/wind/`: `WindController`, which picks the wind and
+writes it into `SimInputs`, and `WindServices`, the bundle tests replace.
+
+- **Fetch:** one Open-Meteo call returns 24 h of 15-minute steps (wind speed, direction, gusts in
+  m/s, Unix times) for coordinates rounded to 2 decimals. Steps with missing or implausible values
+  are skipped; a missing gust is 1.5 × the mean. 8 s timeout. Any failure to get an answer is
+  "offline"; an error status or unusable body is a "service error".
+- **Timeline:** speed and gust interpolated linearly, direction as a speed-weighted vector, held at
+  the ends for up to 15 minutes. The controller writes it into `SimInputs` once a second.
+- **Source states:** *live* while the forecast is under 40 minutes old (refreshes are every
+  30 minutes ± 10%, so a normal refresh never shows "cached"), then *cached* while it still covers
+  now (up to 24 h), then the *ambient* breeze. *Manual* mode plays the sliders and fetches nothing.
+  A cached forecast is used only for the location it was fetched for.
+- **Ambient breeze:** a pure function of the clock: 2.6 m/s ± 0.9 over periods of 3–7 minutes, from
+  about 255° ± 25°, gust factor 1.5. It plays on first run (no location yet) and whenever there's
+  no usable forecast.
+- **Refresh and retry:** fetch on launch; every 30 minutes (± 10%) in the foreground; on return to
+  the app if the data is over 15 minutes old or the last attempt failed. Failures back off 30 s, 1,
+  2, 4, 8, 15 minutes (± 20%). Nothing is fetched while the app is hidden. A result for a location
+  the user has since changed is dropped.
+- **No audible jumps:** the first wind after launch is applied at once (`windResponseTime` 0 for
+  1 s), so a cached forecast plays from the first frame. After that, forecast changes ease in over
+  30 s, and changes the user makes (mode, placement, location) over 5 s for the next 10 s.
+  `wind_response_test.dart` checks it in the physics: a forecast jump from 3 to 10 m/s leaves the
+  hits in the next 5 s at the level of the 40 s before, while the same jump applied at once more
+  than doubles them. (Measured: 22 vs 20 hits eased, 42 vs 20 at once, over three seeds.)
+- **Location:** permission is asked only when the user taps "Mine"; a launch never prompts. Coarse
+  only: Android declares `ACCESS_COARSE_LOCATION` alone, iOS sets
+  `NSLocationDefaultAccuracyReduced`. A fix under 30 minutes old is reused. On Android, an app with
+  only coarse permission can't switch on GPS, so its fix comes from network location ("Location
+  Accuracy"). When that is off, Play Services' location client shows a dialog offering to turn it
+  on. So a tap on "Mine" uses Play Services (the dialog is a fair answer to "use my location"), and
+  launches and refreshes use the platform location manager, which never shows a dialog. With no
+  fix on a refresh, the last good position is reused. Declining the permission keeps the previous
+  choice. Otherwise the user can search a city (Open-Meteo geocoding).
+- **Platform setup:** Android `INTERNET` in the main manifest (release builds need it); macOS
+  `network.client` and location entitlements plus usage strings (not built: no Xcode here).
+- **Checked on the web** (Playwright, real API): first launch plays the breeze without any request;
+  "Mine" with a Berlin position gave live wind in ~1 s; a reload with the API blocked played the
+  cached forecast from the first frame; the city search lists same-named places with region and
+  country, fails politely offline, and a pick plays that city's wind.
+- **Checked on the Android emulator** (a separate emulator, Android 16): the permission prompt offers
+  approximate location only; the chime keeps playing behind it. After "Turn on" for Location
+  Accuracy, live wind arrived (4.9 m/s NW, gusts 11.2). The very first fetch on the freshly booted
+  emulator failed and the 30 s retry succeeded. An airplane-mode relaunch played the cached forecast
+  from the first frame (2 hits/s) and showed "offline, retrying in 11 s".
+- **Not done yet:** MET Norway provider (for a commercial release; needs an identifying
+  User-Agent, which browsers don't allow, so web would stay on Open-Meteo or go through a proxy);
+  persisting mode and placement (Phase 6 settings); Beaufort wording and the wind chip (Phase 6).
 
 ## H. MVP Definition
 
