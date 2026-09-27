@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:chime_sim/chime_sim.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wind_chimes/motion/motion_controller.dart';
+import 'package:wind_chimes/motion/motion_source.dart';
 
 import 'fake_motion_source.dart';
 
@@ -91,6 +92,16 @@ void main() {
     controller.update(0.3);
     expect(controller.snapshot.value.status, MotionStatus.unavailable);
     expect(inputs.gravityDirY, -1);
+  });
+
+  test('without motion sensors, motion is unavailable at once', () async {
+    controller = MotionController(source: const NoMotionSource(), inputs: inputs)..start();
+    await settle();
+    expect(controller.isRunning, isFalse);
+    expect(controller.snapshot.value.status, MotionStatus.unavailable);
+    expect(inputs.gravityDirY, -1);
+    controller.start();
+    expect(controller.isRunning, isFalse);
   });
 
   test('stopping lets the chime hang straight again', () async {

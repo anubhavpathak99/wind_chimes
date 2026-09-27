@@ -20,7 +20,7 @@ class AppServices {
   });
 
   /// Open-Meteo for forecasts and city search, `geolocator` for location, shared preferences for
-  /// settings and the cache, `sensors_plus` for motion.
+  /// settings and the cache, `sensors_plus` for motion where the plugin exists.
   factory AppServices.standard() {
     final client = http.Client();
     return AppServices(
@@ -28,7 +28,9 @@ class AppServices {
       location: const GeolocatorLocationService(),
       places: OpenMeteoPlaceSearch(client),
       store: SharedPreferencesStore(),
-      motion: const SensorsPlusMotionSource(),
+      motion: SensorsPlusMotionSource.isSupported
+          ? const SensorsPlusMotionSource()
+          : const NoMotionSource(),
       onDispose: client.close,
     );
   }

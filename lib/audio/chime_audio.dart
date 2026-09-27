@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:audio_session/audio_session.dart';
 import 'package:chime_sim/chime_sim.dart';
@@ -51,6 +52,9 @@ class ChimeAudio implements CollisionSink, VoiceOutput {
   double _statusClock = 0;
   double _volume = 1;
   double _ambience = 1;
+  bool _meterWanted = false;
+  StreamSubscription<AudioVisualizationData>? _meter;
+  double _outputPeak = 0;
 
   bool get isRunning => _running;
 
@@ -66,6 +70,45 @@ class ChimeAudio implements CollisionSink, VoiceOutput {
   set ambience(double value) => _ambience = value.clamp(0.0, 1.0);
 
   double get _gain => _volume * _volume;
+
+  /// Measures what actually comes out of the mixer, for the stats panel: the loudest sample of
+  /// each half second is reported in [status] ("out −18 dB", or "out silent"). This tells "no
+  /// hits" apart from "no sound". Off by default: the engine's visualization tap costs a little.
+  set metering(bool on) {
+    _meterWanted = on;
+    _applyMetering();
+  }
+
+  void _applyMetering() {
+    if (!_running) return;
+    final soloud = SoLoud.instance;
+    try {
+      if (_meterWanted && _meter == null) {
+        soloud.setVisualizationEnabled(true, kind: VisualizationKind.wave);
+        _meter = soloud.audioVisualizationEvents.listen((data) {
+          final wave = data.waveData;
+          if (wave == null) return;
+          for (final v in wave) {
+            if (v.abs() > _outputPeak) _outputPeak = v.abs();
+          }
+        });
+      } else if (!_meterWanted && _meter != null) {
+        _meter!.cancel();
+        _meter = null;
+        soloud.setVisualizationEnabled(false);
+      }
+    } catch (_) {
+      // Metering is a diagnostic; without it the stats just don't show the level.
+    }
+  }
+
+  String get _outputLevel {
+    if (_meter == null) return '';
+    final peak = _outputPeak;
+    _outputPeak = 0;
+    if (peak < 1e-5) return ' · out silent';
+    return ' · out ${(20 * math.log(peak) / math.ln10).round()} dB';
+  }
 
   Future<void> start() async {
     if (_starting || _running) return;
@@ -108,6 +151,7 @@ class ChimeAudio implements CollisionSink, VoiceOutput {
       _running = true;
       status.value = 'on';
       if (!kReleaseMode) debugPrint('ChimeAudio: ready in ${clock.elapsedMilliseconds} ms');
+      _applyMetering();
       unawaited(_completeBank(first, clock));
     } catch (error) {
       status.value = 'unavailable: $error';
@@ -158,7 +202,7 @@ class ChimeAudio implements CollisionSink, VoiceOutput {
     if (_statusClock >= _statusInterval) {
       _statusClock = 0;
       final dropped = _voices.dropped > 0 ? ' · ${_voices.dropped} soft hits skipped' : '';
-      status.value = 'on · ${_voices.activeVoices} voices$dropped';
+      status.value = 'on · ${_voices.activeVoices} voices$_outputLevel$dropped';
     }
   }
 
@@ -189,6 +233,7 @@ class ChimeAudio implements CollisionSink, VoiceOutput {
   }
 
   Future<void> dispose() async {
+    await _meter?.cancel();
     await _interruptions?.cancel();
     if (_running) {
       _running = false;

@@ -111,6 +111,10 @@ class WindChip extends StatelessWidget {
         style: dim.copyWith(color: Colors.white),
       ),
       Text(source, style: dim),
+      if (status.lifted)
+        Text('Calm here, so a gentle breeze is playing', style: dim.copyWith(color: Colors.white))
+      else if (status.source != WindSource.manual && r.speed < 1.5)
+        Text('Calm: touch the chime to play it', style: dim.copyWith(color: Colors.white)),
       if (WindText.problem(status) case final problem?)
         Text(problem, style: dim.copyWith(color: warning)),
       if (status.source == WindSource.live || status.source == WindSource.cached)

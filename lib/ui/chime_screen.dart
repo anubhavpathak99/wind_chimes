@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app/app_services.dart';
+import '../audio/background_playback.dart';
 import '../audio/chime_audio.dart';
 import '../game/debug_stats.dart';
 import '../game/render/sky.dart';
@@ -52,6 +53,7 @@ class _ChimeScreenState extends State<ChimeScreen> {
   final _stats = DebugStats();
   late final _simulation = ChimeSimulation(ChimeConfig.pentatonicAluminium());
   late final _audio = ChimeAudio(_simulation.rods);
+  final _background = const BackgroundPlayback();
   late final _motion = MotionController(source: widget.services.motion, inputs: _simulation.inputs);
   late final _wind = WindController(
     inputs: _simulation.inputs,
@@ -92,17 +94,24 @@ class _ChimeScreenState extends State<ChimeScreen> {
   @override
   void initState() {
     super.initState();
-    // Off screen: fade the sound out, switch the sensors off, stop fetching weather and save the
-    // settings; back on screen, the reverse.
+    // Off screen the chime keeps playing until the app is closed, advancing without frames. The
+    // sensors switch off (a phone in a pocket shouldn't play it), weather isn't fetched and the
+    // settings are saved; back on screen, the reverse.
     _lifecycle = AppLifecycleListener(
       onHide: () {
-        _audio.suspend();
+        if (_audio.isRunning) {
+          _game.runHeadless();
+          _background.start();
+        }
         _motion.stop();
         _wind.pause();
         _settings.flush();
       },
       onShow: () {
-        _audio.resume();
+        if (_game.isHeadless) {
+          _background.stop();
+          _game.stopHeadless();
+        }
         _motion.start();
         _wind.resume();
       },
@@ -118,6 +127,7 @@ class _ChimeScreenState extends State<ChimeScreen> {
       if (_simulation.time < 1) _simulation.warmUp(_warmUpSeconds);
       setState(() => _windReady = true);
       _overlays.linger = _offerPending;
+      _askForNotificationsOnce();
     });
     if (!widget.audioEnabled) {
       _audio.status.value = 'disabled';
@@ -171,6 +181,24 @@ class _ChimeScreenState extends State<ChimeScreen> {
     _applyToEngines(s);
     _overlays.linger = _offerPending;
     setState(() {});
+    _askForNotificationsOnce();
+  }
+
+  /// Once, at the first quiet moment: never on top of the first-run location question, the
+  /// location dialog it leads to, or the city search. Android 13+ shows the background-playback
+  /// notification (and its Stop) only with permission.
+  void _askForNotificationsOnce() {
+    if (!widget.audioEnabled ||
+        !BackgroundPlayback.hasNotification ||
+        _settings.value.notificationsAsked ||
+        !_windReady ||
+        _offerPending ||
+        _offerBusy ||
+        _sheetOpen) {
+      return;
+    }
+    _changeSettings((s) => s.copyWith(notificationsAsked: true));
+    _background.requestNotifications();
   }
 
   void _applyToEngines(AppSettings s) {
@@ -178,8 +206,10 @@ class _ChimeScreenState extends State<ChimeScreen> {
     s.motion.applyTo(_motion.processor);
     _audio
       ..volume = s.volume
-      ..ambience = s.ambience;
+      ..ambience = s.ambience
+      ..metering = s.showStats;
     _haptics.enabled = s.haptics;
+    _wind.keepBreeze = s.keepBreeze;
     if (_sky.followsTime != s.skyFollowsTime) {
       _sky
         ..followsTime = s.skyFollowsTime
@@ -247,7 +277,10 @@ class _ChimeScreenState extends State<ChimeScreen> {
     if (open == _sheetOpen) return;
     _sheetOpen = open;
     _overlays.hold(#sheet, open);
-    if (!open) _searchFocus.unfocus();
+    if (!open) {
+      _searchFocus.unfocus();
+      _askForNotificationsOnce();
+    }
   }
 
   Future<void> _useLocationFromOffer() async {

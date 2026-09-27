@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui';
@@ -17,6 +18,9 @@ import 'render/wind_motes.dart';
 /// [collisionSinks] (audio, debug stats). [beforePhysics] runs first each frame, so inputs such as
 /// phone motion land in this frame's steps; [onFrame] runs once the frame's physics is done.
 /// [onEmptyTap] reports a tap on the sky rather than the chime.
+///
+/// With nothing on screen Flutter draws no frames, so Flame's loop stops. Between [runHeadless]
+/// and [stopHeadless] the simulation advances from a timer instead, and the chime keeps sounding.
 class WindChimeGame extends FlameGame implements CollisionSink {
   WindChimeGame({
     required this.simulation,
@@ -42,6 +46,12 @@ class WindChimeGame extends FlameGame implements CollisionSink {
   final Float64List _end = Float64List(3);
   final Vector2 _fitted = Vector2.zero();
   final Stopwatch _physicsClock = Stopwatch();
+  final Stopwatch _headlessClock = Stopwatch();
+  Timer? _headless;
+
+  /// How often the simulation advances while nothing is drawn. The physics steps are fixed either
+  /// way; this only sets how late a strike can be heard.
+  static const headlessInterval = Duration(milliseconds: 20);
 
   /// Room kept around the chime's outermost particles when framing it, meters: enough for the
   /// sail's corners when it flies sideways.
@@ -76,8 +86,51 @@ class WindChimeGame extends FlameGame implements CollisionSink {
     super.onGameResize(size);
   }
 
+  bool get isHeadless => _headless != null;
+
+  /// Pauses Flame's loop and advances the simulation from a timer, for the app in the background.
+  void runHeadless() {
+    if (isHeadless) return;
+    pauseEngine();
+    _headlessClock
+      ..reset()
+      ..start();
+    _headless = Timer.periodic(headlessInterval, (_) {
+      final dt = _headlessClock.elapsedMicroseconds / Duration.microsecondsPerSecond;
+      _headlessClock
+        ..reset()
+        ..start();
+      _advance(dt);
+    });
+  }
+
+  /// Back on screen: Flame's loop takes over again.
+  void stopHeadless() {
+    if (!isHeadless) return;
+    _headless!.cancel();
+    _headless = null;
+    resumeEngine();
+  }
+
+  @override
+  void onRemove() {
+    _headless?.cancel();
+    _headless = null;
+    super.onRemove();
+  }
+
   @override
   void update(double dt) {
+    final steps = _advance(dt);
+    // Hold the camera still while a finger drags, so the world doesn't slide under it.
+    if (!simulation.inputs.isTouching) _frameChime(dt);
+    stats?.recordFrame(dt, steps, simulation, physicsMicros: _physicsClock.elapsedMicroseconds);
+    super.update(dt);
+  }
+
+  /// Everything a frame does except drawing: inputs, physics, impacts, then [onFrame]. Returns the
+  /// number of fixed steps run.
+  int _advance(double dt) {
     beforePhysics?.call(dt);
     _physicsClock
       ..reset()
@@ -85,11 +138,8 @@ class WindChimeGame extends FlameGame implements CollisionSink {
     final steps = simulation.advance(dt);
     _physicsClock.stop();
     simulation.events.drainTo(this);
-    // Hold the camera still while a finger drags, so the world doesn't slide under it.
-    if (!simulation.inputs.isTouching) _frameChime(dt);
     onFrame?.call(dt);
-    stats?.recordFrame(dt, steps, simulation, physicsMicros: _physicsClock.elapsedMicroseconds);
-    super.update(dt);
+    return steps;
   }
 
   void _frameChime(double dt) {

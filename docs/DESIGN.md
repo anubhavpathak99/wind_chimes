@@ -120,7 +120,7 @@ These are the decisions that differ from the original brief, and why.
 | Weather (every 30–60 min, or on resume if stale) | Fetch, cache, update `WindTarget` |
 | Once per second | Interpolate the forecast timeline to get the current mean-wind target |
 | User interaction | Settings → new config; drag → soft spring constraint on a body; swipe → gust |
-| App lifecycle | **Pause:** stop sensors, fade and pause audio, cancel timers (Flame's `pauseWhenBackgrounded` only stops the loop). **Resume:** reset the accumulator and filters, refresh stale weather, fade audio in |
+| App lifecycle | **Hidden:** stop sensors and weather fetches; audio plays on, the simulation advancing from a 50 Hz timer instead of frames. **Shown:** Flame's loop takes over, refresh stale weather, restart sensors |
 
 ### Performance checklist
 
@@ -631,8 +631,8 @@ at the chime (silent below 0.3 m/s, up to −9 dB and 1.3× speed), so gusts are
 
 **Session and lifecycle:** iOS playback category with mix-with-others (not silenced by the ringer
 switch; music can play alongside); Android plays as media without taking audio focus. Interruptions
-and the app leaving the screen fade out over 250 ms and stop the audio device; returning restarts
-it and fades in over 800 ms. Background playback is not in the MVP.
+fade out over 250 ms and stop the audio device; their end restarts it and fades in over 800 ms. The
+chime plays on in the background (see "Background playback").
 
 **Soak results** (5 simulated minutes, real impacts through mapper and allocator): at 3 m/s, 346
 voices, no tube ever repeated a sample back to back, peak 9 voices; in a 20 m/s gale, peak 15 of 24,
@@ -852,6 +852,52 @@ hid the handle; a widget test depended on the clock-driven ambient breeze.
 **Not done.** A frame-rate cap for 120 Hz screens needs the platform's display-mode API; left until
 real-device measurements say it is needed.
 
+### Calm air and the output meter
+
+Reported after Phase 7: no sound on the emulator. The audio engine was fine; the emulator's default
+location (Mountain View) had about 2 m/s of wind, which at a garden chime is a soft tap every
+3–10 s and a wind bed at ~3% volume: physically right, and indistinguishable from broken.
+
+- **Keep a gentle breeze** (on by default, in the Wind section): real wind (live or cached) is
+  played as at least a gentle breeze, a soft maximum (v⁴ + 2.4⁴)^¼ m/s with gusts keeping their
+  ratio. Winds above 4 m/s change by under 5%; the ambient breeze and manual wind are never
+  lifted. The chip still shows the real wind, and says "Calm here, so a gentle breeze is playing";
+  with the option off it says "Calm: touch the chime to play it".
+- **Output meter:** with stats on, the audio line shows the loudest output sample of each half
+  second ("out −12 dB", or "out silent"), from the mixer's visualization tap. It tells "no hits"
+  apart from "no sound". On the emulator: 1.5 hits/s in the ambient breeze, peaks at −12 dBFS.
+
+### Background playback
+
+The chime plays until the app is closed, on screen or not.
+
+- **Simulation:** with nothing on screen Flutter draws no frames and Flame's loop stops, so
+  `WindChimeGame.runHeadless` pauses the engine and advances the simulation from a 20 ms timer:
+  same fixed steps, impacts and audio frame, no drawing or camera. Showing the app hands back to
+  Flame's loop, whose first frame after resuming has dt = 0.
+- **Hidden:** sensors off (a phone in a pocket shouldn't play the chime), no weather fetches, but
+  the once-a-second wind clock keeps following the forecast it has (24 h), then the ambient breeze.
+  Returning refreshes it if it is over 15 minutes old. Only when audio is running.
+- **iOS:** `UIBackgroundModes: audio` with the existing playback session.
+- **Android:** `PlaybackService`, a `mediaPlayback` foreground service with a low-importance
+  notification (tap to return), started over `wind_chimes/background_playback` when the app hides
+  (Android 12+ allows that for a few seconds after leaving the screen) and stopped when it shows.
+  `stopWithTask` plus `MainActivity.onDestroy` end it with the app; the Flutter engine goes with
+  the activity and `flutter_soloud` retires its native engine with it. Without the service the
+  emulator's audio track showed `frozen-while-active`: Android freezes a cached app within seconds.
+- **Stop:** the notification's Stop closes the app as swiping it away does: the service calls
+  `MainActivity.finishAndRemoveTask()`, and the engine and sound go with the activity.
+- **Notification permission:** Android 13+ shows the notification only with `POST_NOTIFICATIONS`.
+  Asked once (`notificationsAsked` in the settings), at the first quiet moment: audio on, the
+  first-run location question answered, no location request or sheet open. That is the first
+  launch after answering it, or right after it. The service runs whether or not it's granted.
+- **Desktop and web:** they keep running anyway; closing the window or tab ends it.
+- **Emulator check (API 37):** hidden for 20 s the service was foreground (type 0x2), the process
+  in state 4 and not frozen, the app's AAudio player `started`; on return the service stopped;
+  removing the task stopped the service and released the app's audio. The permission dialog came
+  up once at launch and not on the next; after Allow the notification showed with Stop, and Stop
+  removed the service, activity, task, notification and the app's audio.
+
 ## H. MVP Definition
 
 The MVP proves one thing: *a physically simulated chime, driven by real wind and your hands, sounds
@@ -866,7 +912,8 @@ sheet, hidden debug panel), portrait, foreground only.
 **Deliberately out:** presets, chime builder and materials; procedural audio; compass and parallax;
 cloth simulation; background audio and sleep timer; tablet and landscape layouts; native plugins,
 proxy server, accounts, analytics; Forge2D; isolates. (Mount rotation, rod–rod collisions, haptics,
-wind particles and time-of-day lighting, first listed here, came in with Phase 7.)
+wind particles and time-of-day lighting, first listed here, came in with Phase 7; background audio
+came after it.)
 
 ---
 
@@ -881,7 +928,7 @@ wind particles and time-of-day lighting, first listed here, came in with Phase 7
   thunderstorm gust fronts.
 - **"Blow on the mic"** to make a gust.
 - **Listen elsewhere:** pick a place on a world map and hear its wind now; replay historical storms.
-- **Sleep mode:** background playback, timer, lock-screen controls.
+- **Sleep mode:** timer and lock-screen controls (background playback is done).
 - Multiple chimes in one spatial scene; head-tracked spatial audio.
 - Record/replay of all simulation inputs, for bug reports and shareable audio clips.
 
@@ -895,7 +942,8 @@ Start with none. Add only when a package proves insufficient:
   stream), ~150 lines per platform, if filtered `sensors_plus` data lags or jitters.
 - Compass heading.
 - Display rotation, if landscape is ever supported.
-- Background audio plumbing (iOS background audio mode, Android media foreground service).
+- Background audio plumbing (iOS background audio mode, Android media foreground service). Done:
+  `PlaybackService.kt`, about 90 lines.
 - Core Haptics, if `HapticFeedback`'s presets feel too coarse.
 - Real-time DSP: C++ via FFI, not platform code.
 

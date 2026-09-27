@@ -56,6 +56,7 @@ class WindStatus {
     this.retryAt,
     this.busy = false,
     this.attribution = '',
+    this.lifted = false,
   });
 
   /// When this status was computed; "updated 5 min ago" is measured from here.
@@ -82,6 +83,10 @@ class WindStatus {
   /// Locating or fetching.
   final bool busy;
   final String attribution;
+
+  /// The real wind is calmer than a gentle breeze, and the chime is playing the breeze instead
+  /// (see [WindController.keepBreeze]); [reading] is still the real wind.
+  final bool lifted;
 }
 
 /// Decides which wind the chime plays and writes it into [SimInputs]:
@@ -95,7 +100,8 @@ class WindStatus {
 /// forecast) from the first frame, and every change after that eases in over [responseTime], so a
 /// new forecast is never heard as a jump. Changes the user makes ease in faster.
 ///
-/// Nothing is fetched in the background: [pause] stops the clock, [resume] restarts it.
+/// Nothing is fetched in the background: between [pause] and [resume] the chime keeps following
+/// the forecast it has (24 hours of it), interpolated once a second as usual.
 class WindController {
   WindController({
     required this.inputs,
@@ -130,6 +136,10 @@ class WindController {
   static const userChangeWindow = Duration(seconds: 10);
   static const locationKey = 'wind.location.v1';
 
+  /// The gentlest wind the chime plays while [keepBreeze] is on, m/s at 10 m: a tinkle every
+  /// few seconds.
+  static const breezeFloor = 2.4;
+
   final SimInputs inputs;
   final AmbientWind ambient;
   late final ValueNotifier<WindStatus> status;
@@ -159,6 +169,27 @@ class WindController {
 
   bool get isRunning => _timer != null;
 
+  /// Whether a real calm is played as a gentle breeze, so the chime is never silent for long.
+  /// Real wind stronger than [breezeFloor] passes through almost unchanged; the ambient breeze
+  /// and manual wind always do.
+  bool get keepBreeze => _keepBreeze;
+  set keepBreeze(bool value) {
+    if (value == _keepBreeze) return;
+    _keepBreeze = value;
+    _update(_clock());
+  }
+
+  bool _keepBreeze = true;
+
+  /// [reading] raised to at least a gentle breeze, smoothly: a soft maximum
+  /// (v⁴ + floor⁴)^¼, with the gusts keeping their ratio to the mean.
+  static WindReading lift(WindReading reading) {
+    final v = reading.speed;
+    final played = math.pow(math.pow(v, 4) + math.pow(breezeFloor, 4), 0.25).toDouble();
+    final gustFactor = v > 0.1 ? math.max(1.0, reading.gust / v) : 1.5;
+    return WindReading(speed: played, gust: played * gustFactor, direction: reading.direction);
+  }
+
   /// Restores the saved location and forecast, starts the chime in the best wind available and
   /// begins fetching. The first wind is applied at once rather than eased in.
   Future<void> start() async {
@@ -169,34 +200,26 @@ class WindController {
     final now = _clock();
     _snapUntil = now.add(const Duration(seconds: 1));
     _nextRefresh = now;
-    if (_paused) {
-      _update(now);
-      return;
-    }
     _startTimer();
     await tick();
   }
 
-  /// Stops fetching and the once-a-second update, for when the app is hidden.
-  void pause() {
-    _paused = true;
-    _timer?.cancel();
-    _timer = null;
-  }
+  /// Stops fetching, for when the app is in the background.
+  void pause() => _paused = true;
 
-  /// Restarts after [pause], refreshing now if the forecast is old or something had failed.
+  /// Fetches again after [pause]: at once if the forecast is old or something had failed.
   void resume() {
+    if (!_paused || _disposed) return;
     _paused = false;
-    if (_disposed || isRunning) return;
     _refreshIfStale(_clock());
-    _startTimer();
-    unawaited(tick());
+    if (isRunning) unawaited(tick());
   }
 
   void dispose() {
     _disposed = true;
     _generation++;
-    pause();
+    _timer?.cancel();
+    _timer = null;
     status.dispose();
   }
 
@@ -208,6 +231,7 @@ class WindController {
     Future<void>? work;
     if (_mode == WindMode.live &&
         _location != null &&
+        !_paused &&
         !_busy &&
         next != null &&
         !now.isBefore(next)) {
@@ -383,11 +407,14 @@ class WindController {
     if (_disposed) return;
     final source = _source(now);
     final reading = _reading(now, source);
+    // Only real wind is lifted: the ambient breeze is gentle by design, manual wind is chosen.
+    final real = source == WindSource.live || source == WindSource.cached;
+    final played = _keepBreeze && real ? lift(reading) : reading;
     final snapUntil = _snapUntil, quickUntil = _quickUntil;
     inputs
-      ..windSpeed = reading.speed
-      ..windGust = reading.gust
-      ..windDirection = reading.direction
+      ..windSpeed = played.speed
+      ..windGust = played.gust
+      ..windDirection = played.direction
       ..placement = _placement
       ..windResponseTime = switch (source) {
         _ when snapUntil != null && now.isBefore(snapUntil) => 0,
@@ -395,10 +422,20 @@ class WindController {
         _ when quickUntil != null && now.isBefore(quickUntil) => userResponseTime,
         _ => responseTime,
       };
-    status.value = _status(now, source: source, reading: reading);
+    status.value = _status(
+      now,
+      source: source,
+      reading: reading,
+      lifted: played.speed > reading.speed + 0.3,
+    );
   }
 
-  WindStatus _status(DateTime now, {WindSource? source, WindReading? reading}) {
+  WindStatus _status(
+    DateTime now, {
+    WindSource? source,
+    WindReading? reading,
+    bool lifted = false,
+  }) {
     source ??= _source(now);
     final live = _mode == WindMode.live;
     final problem = _problem ?? (live && _location == null ? WindProblem.noLocation : null);
@@ -420,6 +457,7 @@ class WindController {
       retryAt: live && _problem != null ? _nextRefresh : null,
       busy: _busy,
       attribution: _weather.attribution,
+      lifted: lifted,
     );
   }
 

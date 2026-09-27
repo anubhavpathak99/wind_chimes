@@ -37,7 +37,7 @@ void main() {
         store: store,
         clock: () => now,
         random: math.Random(1),
-      );
+      )..keepBreeze = false;
 
   /// Moves the clock on, ticking once a second as the app does, and lets fetches finish.
   Future<void> advance(Duration by) async {
@@ -246,7 +246,6 @@ void main() {
       weather.respond = (_) => steadyTimeline(now);
       await controller().start();
       wind.pause();
-      expect(wind.isRunning, isFalse);
       now = now.add(const Duration(minutes: 5));
       wind.resume();
       await settle();
@@ -257,6 +256,18 @@ void main() {
       wind.resume();
       await settle();
       expect(weather.requests.length, 2);
+    });
+
+    test('while paused the chime keeps following the forecast', () async {
+      remember(munich);
+      weather.respond = (_) => steadyTimeline(now);
+      await controller().start();
+      wind.pause();
+      expect(wind.isRunning, isTrue);
+      now = now.add(const Duration(hours: 2));
+      await wind.tick();
+      expect(weather.requests.length, 1);
+      expect(wind.status.value.source, WindSource.cached);
     });
 
     test('returning to the app retries at once after a failure', () async {
@@ -365,6 +376,46 @@ void main() {
       await settle();
       expect(wind.status.value.location, oslo);
       expect(inputs.windSpeed, 4);
+    });
+  });
+
+  group('calm air', () {
+    test('a real calm is played as a gentle breeze, and said so', () async {
+      remember(munich);
+      weather.respond = (_) => steadyTimeline(now, speed: 1, gust: 1.6, direction: 300);
+      await controller().start();
+      wind.keepBreeze = true;
+      expect(inputs.windSpeed, greaterThan(WindController.breezeFloor - 0.01));
+      expect(inputs.windGust / inputs.windSpeed, closeTo(1.6, 1e-9), reason: 'gusts keep their ratio');
+      expect(inputs.windDirection, 300);
+      final s = wind.status.value;
+      expect(s.reading.speed, 1, reason: 'the chip still shows the real wind');
+      expect(s.lifted, isTrue);
+
+      wind.keepBreeze = false;
+      expect(inputs.windSpeed, 1);
+      expect(wind.status.value.lifted, isFalse);
+    });
+
+    test('real wind above a gentle breeze passes through almost unchanged', () {
+      controller();
+      for (final v in [4.0, 7.0, 15.0]) {
+        final played = WindController.lift(WindReading(speed: v, gust: v * 1.5, direction: 0));
+        expect(played.speed, inInclusiveRange(v, v * 1.05), reason: '$v m/s');
+      }
+      expect(WindController.lift(const WindReading(speed: 0, gust: 0, direction: 0)).speed,
+          closeTo(WindController.breezeFloor, 1e-9));
+    });
+
+    test('manual wind and the ambient breeze are never lifted', () async {
+      await controller().start();
+      wind.keepBreeze = true;
+      expect(inputs.windSpeed, const AmbientWind().at(now).speed);
+      expect(wind.status.value.lifted, isFalse);
+      wind
+        ..setMode(WindMode.manual)
+        ..setManual(const ManualWind(speed: 0.5));
+      expect(inputs.windSpeed, 0.5);
     });
   });
 }

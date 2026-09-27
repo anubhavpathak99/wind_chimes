@@ -140,7 +140,7 @@ class _ControlsSheetState extends State<ControlsSheet> {
             onSelectionChanged: (m) => change((x) => x.copyWith(mode: m.first)),
           ),
           const SizedBox(height: 16),
-          if (s.mode == WindMode.live)
+          if (s.mode == WindMode.live) ...[
             ValueListenableBuilder<WindStatus>(
               valueListenable: widget.wind.status,
               builder: (context, status, _) => LocationSection(
@@ -149,8 +149,16 @@ class _ControlsSheetState extends State<ControlsSheet> {
                 places: widget.places,
                 searchFocus: widget.searchFocus,
               ),
-            )
-          else
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              secondary: const Icon(Icons.air),
+              title: const Text('Keep a gentle breeze'),
+              subtitle: const Text('When the real wind is calm, the chime still plays softly'),
+              value: s.keepBreeze,
+              onChanged: (v) => change((x) => x.copyWith(keepBreeze: v)),
+            ),
+          ] else
             ManualWindControls(
               manual: s.manual,
               units: s.units,

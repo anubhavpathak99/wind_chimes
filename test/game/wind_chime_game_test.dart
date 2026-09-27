@@ -20,4 +20,20 @@ void main() {
     expect(p.zoom, 1, reason: 'a real resize refits');
     expect(p.visibleHeight, closeTo(400 * 700 / 844, 1e-9), reason: 'keeping the visible share');
   });
+
+  test('headless, the simulation advances from a timer and hears its impacts', () async {
+    var frames = 0;
+    final game = WindChimeGame(
+      simulation: ChimeSimulation(ChimeConfig.pentatonicAluminium()),
+      onFrame: (_) => frames++,
+    )..runHeadless();
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    game.stopHeadless();
+    final time = game.simulation.time;
+    expect(time, closeTo(0.3, 0.15));
+    expect(frames, greaterThan(5));
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(game.simulation.time, time, reason: 'stopped');
+    expect(game.paused, isFalse, reason: "Flame's loop is back");
+  });
 }

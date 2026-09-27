@@ -36,9 +36,11 @@ class AppSettings {
     this.motion = const MotionSettings(),
     this.units = SpeedUnit.kilometersPerHour,
     this.liveWindOffered = false,
+    this.notificationsAsked = false,
     this.showStats = false,
     this.haptics = true,
     this.skyFollowsTime = true,
+    this.keepBreeze = true,
   });
 
   final WindMode mode;
@@ -55,6 +57,9 @@ class AppSettings {
 
   /// Whether the first-run "use live wind?" offer has been answered.
   final bool liveWindOffered;
+
+  /// Whether Android has been asked to let the background-playback notification show.
+  final bool notificationsAsked;
   final bool showStats;
 
   /// Tap the phone when the chime is struck while being played by hand or by shaking.
@@ -62,6 +67,9 @@ class AppSettings {
 
   /// Sky and light follow the sun where the chime is; otherwise always dusk.
   final bool skyFollowsTime;
+
+  /// Play a real calm as a gentle breeze, so the chime is never silent for long.
+  final bool keepBreeze;
 
   AppSettings copyWith({
     WindMode? mode,
@@ -72,9 +80,11 @@ class AppSettings {
     MotionSettings? motion,
     SpeedUnit? units,
     bool? liveWindOffered,
+    bool? notificationsAsked,
     bool? showStats,
     bool? haptics,
     bool? skyFollowsTime,
+    bool? keepBreeze,
   }) =>
       AppSettings(
         mode: mode ?? this.mode,
@@ -85,9 +95,11 @@ class AppSettings {
         motion: motion ?? this.motion,
         units: units ?? this.units,
         liveWindOffered: liveWindOffered ?? this.liveWindOffered,
+        notificationsAsked: notificationsAsked ?? this.notificationsAsked,
         showStats: showStats ?? this.showStats,
         haptics: haptics ?? this.haptics,
         skyFollowsTime: skyFollowsTime ?? this.skyFollowsTime,
+        keepBreeze: keepBreeze ?? this.keepBreeze,
       );
 
   Map<String, Object?> toJson() => {
@@ -104,9 +116,11 @@ class AppSettings {
         'tilt': motion.tiltEnabled,
         'units': units.name,
         'liveWindOffered': liveWindOffered,
+        'notificationsAsked': notificationsAsked,
         'showStats': showStats,
         'haptics': haptics,
         'skyFollowsTime': skyFollowsTime,
+        'keepBreeze': keepBreeze,
       };
 
   /// Reads what it can: anything missing or unreadable keeps its value from [defaults], so a
@@ -143,9 +157,11 @@ class AppSettings {
       ),
       units: named(SpeedUnit.values, 'units', d.units),
       liveWindOffered: pick('liveWindOffered', d.liveWindOffered),
+      notificationsAsked: pick('notificationsAsked', d.notificationsAsked),
       showStats: pick('showStats', d.showStats),
       haptics: pick('haptics', d.haptics),
       skyFollowsTime: pick('skyFollowsTime', d.skyFollowsTime),
+      keepBreeze: pick('keepBreeze', d.keepBreeze),
     );
   }
 }

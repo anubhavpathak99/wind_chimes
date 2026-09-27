@@ -19,9 +19,11 @@ void main() {
     motion: MotionSettings(sensitivity: 1.5, tiltEnabled: false),
     units: SpeedUnit.knots,
     liveWindOffered: true,
+    notificationsAsked: true,
     showStats: true,
     haptics: false,
     skyFollowsTime: false,
+    keepBreeze: false,
   );
 
   test('survives a round trip through JSON', () {
